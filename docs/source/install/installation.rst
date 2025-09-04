@@ -12,13 +12,11 @@ Follow the `official JAX installation guide <https://docs.jax.dev/en/latest/inst
 
 **Option 2: JAX AI Stack**
 
-An easy way to get started is with the JAX AI Stack, which includes JAX, Flax, Optax, and other ML libraries. However, we don't recommend this approach yet, since we need Flax 0.11.2, and jax-ai-stack 2025.9.3 still has 0.11.1.
+An easy way to get started is with the `JAX AI Stack repository <https://github.com/jax-ml/jax-ai-stack>`__, which includes JAX, Flax, Optax, and other ML libraries. However, we don't recommend this approach yet, since we need Flax 0.11.2, and jax-ai-stack 2025.9.3 is pinned to exactly 0.11.1.
 
 .. code-block:: bash
 
    pip install jax-ai-stack
-
-For more details, see the `JAX AI Stack repository <https://github.com/jax-ml/jax-ai-stack>`__.
 
 Install JraphX
 --------------

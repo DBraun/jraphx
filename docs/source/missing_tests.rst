@@ -209,7 +209,6 @@ Model Initialization
 Testing Strategy
 ~~~~~~~~~~~~~~~~
 - Maintain original test logic and assertions
-- Use ``JAX_PLATFORMS=cpu`` for consistent testing
 - Comment out unportable sections with clear TODO notes
 - Document conversion limitations in test docstrings
 
@@ -233,7 +232,7 @@ When contributing new test conversions:
 1. Follow the established conversion patterns above
 2. Document any limitations or missing functionality
 3. Update this document with the conversion status
-4. Ensure tests pass with ``JAX_PLATFORMS=cpu python -m pytest``
+4. Ensure tests pass with ``python -m pytest``
 5. Add TODO comments for unportable test sections
 
 For questions about test conversion priorities or implementation approaches, refer to the main JraphX documentation and the ``docs/source/missing_features.rst`` file.

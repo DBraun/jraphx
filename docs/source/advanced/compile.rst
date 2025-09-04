@@ -1,8 +1,7 @@
 JAX Compilation and XLA
 =======================
 
-JAX automatically compiles your **JraphX** code to optimized XLA (Accelerated Linear Algebra) programs, providing significant performance improvements.
-Unlike PyTorch's :meth:`torch.compile`, JAX compilation is built into the core of the framework and works seamlessly with **JraphX** models.
+JAX can automatically compile your **JraphX** code to optimized XLA (Accelerated Linear Algebra) programs, providing significant performance improvements.
 
 XLA Compilation Benefits
 ------------------------
@@ -10,7 +9,7 @@ XLA Compilation Benefits
 XLA compilation in JAX provides several advantages for **JraphX** models:
 
 - **Automatic optimization**: XLA optimizes the entire computation graph
-- **Cross-platform**: Same optimizations work on CPU, GPU, and TPU
+- **Cross-platform**: Support for CPU, GPU, and TPU
 - **Operator fusion**: Combines multiple operations for better memory usage
 - **Vectorization**: Automatic SIMD optimization
 
@@ -31,7 +30,7 @@ XLA compilation in JAX provides several advantages for **JraphX** models:
     )
 
     # JIT compilation triggers XLA optimization
-    @jax.jit
+    @nnx.jit
     def optimized_forward(model, x, edge_index):
         return model(x, edge_index)
 
@@ -55,7 +54,7 @@ Compilation vs. Eager Mode
         return output
 
     # Compiled mode - good for production
-    @jax.jit
+    @nnx.jit
     def production_model(model, x, edge_index):
         return model(x, edge_index)
 
@@ -64,36 +63,6 @@ Compilation vs. Eager Mode
 
     # Switch to compiled mode for performance
     prod_output = production_model(model, x, edge_index)
-
-Advanced Compilation Features
------------------------------
-
-**Static argument handling:**
-
-.. code-block:: python
-
-    # Some arguments can be marked as static for better optimization
-    @jax.jit
-    def gnn_with_static_args(model, x, edge_index, num_layers=3):
-        # Process with different numbers of layers
-        for _ in range(num_layers):
-            x = model.layers[0](x, edge_index)  # Simplified example
-        return x
-
-    # Use static_argnums to mark compile-time constants
-    @jax.jit(static_argnums=(3,))  # num_layers is static
-    def optimized_gnn_with_static(model, x, edge_index, num_layers):
-        return gnn_with_static_args(model, x, edge_index, num_layers)
-
-**Donation optimization:**
-
-.. code-block:: python
-
-    # Use donate_argnums to optimize memory usage
-    @jax.jit(donate_argnums=(1,))  # Donate the 'x' argument
-    def memory_efficient_gnn(model, x, edge_index):
-        # JAX can reuse memory from 'x' for the output
-        return model(x, edge_index)
 
 Debugging Compiled Code
 -----------------------
@@ -159,4 +128,4 @@ Here's how **JraphX** with JAX compilation compares to other approaches:
     print(f"JIT mode: {jit_time:.3f}s")
     print(f"Speedup: {eager_time / jit_time:.2f}x")
 
-For more information on JAX compilation and XLA, see the `JAX compilation guide <https://jax.readthedocs.io/en/latest/jax-101/02-jitting.html>`__.
+For more information on JAX compilation and XLA, see the `JAX compilation guide <https://docs.jax.dev/en/latest/jit-compilation.html>`__.

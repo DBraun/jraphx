@@ -25,8 +25,8 @@ A single graph in **JraphX** is described by an instance of :class:`jraphx.data.
 
 None of these attributes are required.
 In fact, the :class:`~jraphx.data.Data` object is not even restricted to these attributes.
-We can, *e.g.*, extend it to save the connectivity of triangles from a 3D mesh in a JAX array with shape :obj:`[3, num_faces]`.
-See the :ref:`3D Mesh Graphs example <3d-mesh-graphs>` for a complete implementation.
+We can extend it to save the connectivity of triangles from a 3D mesh in a JAX array with shape :obj:`[3, num_faces]`.
+See the :ref:`3D Mesh Graphs example <Extending-Both-Data-and-Batch-Classes>` for a complete implementation.
 
 .. Note::
     JAX uses a functional programming paradigm where arrays are immutable. This means that operations on :class:`~jraphx.data.Data` objects return new instances rather than modifying existing ones.

@@ -17,11 +17,10 @@ JraphX is a Graph Neural Network library for JAX/Flax NNX. It serves as an unoff
 ### Code Quality
 - `make lint` - Run ruff linting
 - `make lint-fix` - Run ruff linting with auto-fix
-- `make typecheck` - Run mypy type checking
 - `make format` - Format code with black and isort
-- `make check` - Run lint + typecheck
-- `make check-all` - Run lint + typecheck + tests
-- `pre-commit run --all-files` - Run all pre-commit hooks
+- `make check` - Run lint
+- `make check-all` - Run lint + tests
+- `make pre-commit` - Run all pre-commit hooks
 
 ### Installation
 - `make install-dev` - Install package with dev dependencies and pre-commit hooks
@@ -44,7 +43,6 @@ JraphX is a Graph Neural Network library for JAX/Flax NNX. It serves as an unoff
 - Tests use pytest and are organized by module hierarchy
 
 ### Development Notes
-- Package follows strict typing with mypy
 - Code formatting with black (100 char line length)
 - Linting with ruff
 - Pre-commit hooks enforce code quality

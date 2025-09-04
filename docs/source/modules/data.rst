@@ -1,7 +1,7 @@
 Working with Graph Data
 =======================
 
-This guide covers how to work with graph data structures in JraphX. JraphX uses ``flax.struct.dataclass`` for its data structures, making them fully compatible with JAX transformations like ``jit``, ``vmap``, ``grad``, and ``pmap``.
+This guide covers how to work with graph data structures in JraphX. JraphX uses `flax.struct.dataclass <https://flax.readthedocs.io/en/latest/api_reference/flax.struct.html>`_ for its data structures, making them fully compatible with JAX transformations like ``jit``, ``vmap``, ``grad``, and ``pmap``.
 
 .. contents:: Contents
     :local:
@@ -20,7 +20,7 @@ Core Data Classes
 The Data Class
 --------------
 
-The ``Data`` class is the fundamental data structure for representing graphs in JraphX. It is immutable and registered as a PyTree for efficient JAX operations.
+The ``Data`` class is the fundamental data structure for representing graphs in JraphX.
 
 .. code-block:: python
 
@@ -127,41 +127,15 @@ The batch vector indicates which graph each node belongs to, enabling proper poo
     graph_embeddings = global_mean_pool(node_embeddings, batch.batch)
     print(f"Graph embeddings shape: {graph_embeddings.shape}")  # [2, hidden_dim]
 
+
+.. _Extending-Both-Data-and-Batch-Classes:
+
 Extending the Data and Batch Classes
 ------------------------------------
 
-For domain-specific attributes, subclass both the base ``Data`` and ``Batch`` classes:
+For domain-specific attributes, we'll subclass both the base ``Data`` and ``Batch`` classes.
 
-Simple Data Extension
-^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    from typing import Optional
-    from flax.struct import dataclass
-    import jraphx
-
-    @dataclass
-    class CitationData(Data):
-        """Data class for citation networks with train/val/test splits."""
-        train_mask: jnp.ndarray | None = None
-        val_mask: jnp.ndarray | None = None
-        test_mask: jnp.ndarray | None = None
-
-    # Use the extended class
-    citation_data = CitationData(
-        x=node_features,
-        edge_index=edges,
-        y=labels,
-        train_mask=train_mask,
-        val_mask=val_mask,
-        test_mask=test_mask
-    )
-
-Extending Both Data and Batch Classes
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For custom Data subclasses with additional fields, create a corresponding Batch subclass and specify batching behavior using class attributes:
+The Data subclass will have easy-to-understand additional fields. The corresponding Batch subclass will do the same while also specifying batching behavior using class attributes.
 
 .. code-block:: python
 
@@ -277,35 +251,6 @@ Example: Molecular Graphs
     # Access graph-level properties
     print(f"Molecular weights: {batch.mol_weight}")  # [16.04, 17.01]
 
-.. _3d-mesh-graphs:
-
-Example: 3D Mesh Graphs
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Using the FaceData and FaceBatch classes defined above, here's how to create and batch 3D mesh graphs:
-
-.. code-block:: python
-
-    # Create a simple triangle mesh (tetrahedron)
-    mesh_graph = FaceData(
-        x=jnp.ones((4, 1)),  # 4 vertices with dummy features
-        edge_index=jnp.array([[0, 1, 2, 0, 1, 2], [1, 2, 0, 3, 3, 3]]),  # Edges
-        face=jnp.array([[0, 1, 2, 0], [1, 2, 0, 1], [2, 0, 1, 3]]),  # 4 triangular faces
-        pos=jnp.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
-                       [0.5, 1.0, 0.0], [0.5, 0.5, 1.0]]),  # 3D positions
-        normal=jnp.array([[0., 0., 1.], [0., 1., 0.],
-                          [1., 0., 0.], [0.5, 0.5, 0.5]]),  # Face normals
-        face_color=jnp.array([[1., 0., 0.], [0., 1., 0.],
-                              [0., 0., 1.], [1., 1., 0.]])  # Face colors
-    )
-
-    # Batch multiple meshes (see Graph Batching section for details)
-    batch = FaceBatch.from_data_list([mesh_graph, mesh_graph, mesh_graph])
-
-    # Unbatch back to individual FaceData objects
-    meshes = batch.to_data_list()
-
-
 Working with PyTorch Geometric
 -------------------------------
 
@@ -354,6 +299,9 @@ Preprocessing
 
 .. code-block:: python
 
+    from functools import partial
+
+    @partial(jax.jit, donate_argnums=0)
     def normalize_features(data: Data) -> Data:
         """Normalize node features to zero mean and unit variance."""
         x = data.x  # [num_nodes, num_node_features]
@@ -401,12 +349,10 @@ JIT Compilation
 
 .. code-block:: python
 
-    @jax.jit
-    def efficient_forward(data: Data, params):
+    @nnx.jit
+    def efficient_forward(data: Data):
         # All operations on Data work with JIT
-        x = data.x
-        edge_index = data.edge_index
-        return model.apply(params, x, edge_index)
+        return model(data.x, data.edge_index)
 
 Large Graphs
 ^^^^^^^^^^^^
@@ -475,16 +421,6 @@ Ensure all attributes are JAX-compatible types or mark non-JAX attributes:
 
         # Non-JAX metadata - won't be traced
         name: str = struct.field(pytree_node=False, default="")
-
-JAX-Specific Features
----------------------
-
-All **JraphX** data structures are designed for JAX:
-
-- **Immutable**: Data objects are immutable, operations return new instances
-- **JIT-Compatible**: All operations work with :obj:`@jax.jit`
-- **Pure Functions**: No side effects, functional programming friendly
-- **Device Agnostic**: Works on CPU, GPU, and TPU seamlessly
 
 See Also
 --------

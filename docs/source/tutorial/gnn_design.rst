@@ -9,7 +9,7 @@ This tutorial shows how to integrate **JraphX** with JAX's transformation system
 JIT Compilation
 ---------------
 
-All **JraphX** models support :obj:`@jax.jit` compilation for optimal performance:
+All **JraphX** models support :obj:`@nnx.jit` compilation for optimal performance:
 
 .. code-block:: python
 
@@ -27,7 +27,7 @@ All **JraphX** models support :obj:`@jax.jit` compilation for optimal performanc
     )
 
     # JIT compile for faster execution
-    @jax.jit
+    @nnx.jit
     def predict(model, data):
         return model(data)
 
@@ -71,7 +71,7 @@ Training with NNX
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
     # Training step with JIT compilation
-    @jax.jit
+    @nnx.jit
     def train_step(model, optimizer, data, targets):
         def loss_fn(model):
             predictions = model(data)
@@ -104,45 +104,45 @@ Use :obj:`nnx.scan` for memory-efficient processing of deep networks:
 
     from jraphx.nn.conv import GCNConv
 
-    def create_deep_gnn_with_scan(num_layers: int, in_features: int,
-                                   hidden_features: int, out_features: int):
-        """Create a deep GNN using nnx.scan for memory efficiency."""
+    class HiddenBlock(nnx.Module):
+        """Single hidden layer block for scanning."""
+        def __init__(self, hidden_features: int, rngs: nnx.Rngs):
+            self.conv = GCNConv(hidden_features, hidden_features, rngs=rngs)
 
-        class HiddenBlock(nnx.Module):
-            """Single hidden layer block for scanning."""
-            def __init__(self, rngs: nnx.Rngs):
-                self.conv = GCNConv(hidden_features, hidden_features, rngs=rngs)
+        def __call__(self, x, edge_index):
+            x = self.conv(x, edge_index)
+            x = nnx.relu(x)
+            return x  # Return only x, no second output needed
 
-            def __call__(self, x, edge_index):
-                x = self.conv(x, edge_index)
-                x = nnx.relu(x)
-                return x  # Return only x, no second output needed
+    class DeepGNN(nnx.Module):
+        def __init__(self, in_features: int, hidden_features: int, out_features: int, num_layers: int, rngs: nnx.Rngs):
+            # Create input and output layers
+            self.input_layer = GCNConv(in_features, hidden_features, rngs=rngs)
+            self.output_layer = GCNConv(hidden_features, out_features, rngs=rngs)
 
-        class DeepGNN(nnx.Module):
-            def __init__(self, rngs: nnx.Rngs):
-                # Create input and output layers
-                self.input_layer = GCNConv(in_features, hidden_features, rngs=rngs)
-                self.output_layer = GCNConv(hidden_features, out_features, rngs=rngs)
+            # Create multiple hidden layers using vmap
+            num_hidden = num_layers - 2
+            self.num_hidden = num_hidden
 
-                # Create multiple hidden layers using vmap
-                num_hidden = num_layers - 2
-
+            if num_hidden > 0:
                 @nnx.split_rngs(splits=num_hidden)
                 @nnx.vmap(in_axes=(0,), out_axes=0)
                 def create_hidden_block(rngs: nnx.Rngs):
-                    return HiddenBlock(rngs=rngs)
+                    return HiddenBlock(hidden_features, rngs=rngs)
 
                 self.hidden_blocks = create_hidden_block(rngs)
-                self.num_hidden = num_hidden
+            else:
+                self.hidden_blocks = None
 
-            def __call__(self, data):
-                x, edge_index = data.x, data.edge_index
+        def __call__(self, data):
+            x, edge_index = data.x, data.edge_index
 
-                # Input layer
-                x = self.input_layer(x, edge_index)
-                x = nnx.relu(x)
+            # Input layer
+            x = self.input_layer(x, edge_index)
+            x = nnx.relu(x)
 
-                # Hidden layers with scan
+            # Hidden layers with scan (only if we have hidden layers)
+            if self.num_hidden > 0:
                 @nnx.scan(in_axes=(nnx.Carry, 0), out_axes=nnx.Carry)
                 def forward_hidden(x, block):
                     x = block(x, edge_index)
@@ -150,13 +150,11 @@ Use :obj:`nnx.scan` for memory-efficient processing of deep networks:
 
                 x = forward_hidden(x, self.hidden_blocks)
 
-                # Output layer
-                return self.output_layer(x, edge_index)
-
-        return DeepGNN
+            # Output layer
+            return self.output_layer(x, edge_index)
 
     # Create and use deep network
-    deep_model = create_deep_gnn_with_scan(10, 16, 64, 7)(rngs=nnx.Rngs(42))
+    deep_model = DeepGNN(16, 64, 7, 10, rngs=nnx.Rngs(42))
     deep_predictions = deep_model(data)
 
 Random Number Generation with Flax 0.11.2
@@ -226,7 +224,7 @@ Here's a complete example showing how to train on multiple graphs efficiently:
         train_graphs.append(Data(x=x, edge_index=edge_index))
 
     # Batch training function
-    @jax.jit
+    @nnx.jit
     def train_on_batch(model, optimizer, graphs, targets):
         batch = Batch.from_data_list(graphs)
 

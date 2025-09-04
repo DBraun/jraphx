@@ -3,13 +3,13 @@
 JraphX Documentation
 ====================
 
-**JraphX** is a Graph Neural Network (GNN) library for JAX/Flax NNX, designed as an unofficial successor to DeepMind's archived jraph library. It provides a PyTorch Geometric-inspired API while leveraging the JAX ecosystems strengths in JIT compilation, sharding, and more.
+**JraphX** is a Graph Neural Network (GNN) library for JAX/Flax NNX, designed as an unofficial successor to DeepMind's archived `jraph <https://github.com/google-deepmind/jraph>`_ library. It provides a `PyTorch Geometric <https://github.com/pyg-team/pytorch_geometric/>`_-inspired API while leveraging the JAX ecosystem's strengths in JIT compilation, `sharding <https://flax.readthedocs.io/en/latest/guides/flax_gspmd.html>`_, and more.
 
 .. note::
    **Attribution Notice**: JraphX builds upon and incorporates code from multiple open-source projects:
 
-   - **PyTorch Geometric** (MIT License, Copyright (c) 2023 PyG Team): JraphX contains substantial portions of code and documentation derived from and modified from PyTorch Geometric.
-   - **Flax** (Apache License 2.0): The Flax NNX neural network library made JraphX's implementation significantly easier and more efficient.
+   - **PyTorch Geometric** (MIT License, Copyright (c) 2023 PyG Team): JraphX contains substantial portions of code and documentation derived from PyTorch Geometric.
+   - **Flax** (Apache License 2.0): The Flax NNX library made JraphX's implementation significantly easier.
    - **Jraph** (Apache License 2.0): DeepMind's original JAX GNN library, which is now archived.
 
    We are grateful to all development teams for creating these foundational libraries that make JraphX possible.
@@ -73,4 +73,5 @@ JraphX consists of various methods for deep learning on graphs and other irregul
    :maxdepth: 1
    :caption: Project Info
 
+   citation
    changelog

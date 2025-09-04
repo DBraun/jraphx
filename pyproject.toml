@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jraphx"
 dynamic = ["version"]
-description = "JAX Graph Extensions - A lightweight GNN library for JAX/Flax NNX"
+description = "Graph Neural Networks with JAX/NNX"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -66,7 +66,6 @@ docs = [
     "sphinx==5.1.1",
     "sphinx-autodoc-typehints==1.19.2",
     "sphinx-copybutton>=0.5.2",
-    "myst-parser<2.0.0",
     "pyg-sphinx-theme @ git+https://github.com/pyg-team/pyg_sphinx_theme.git",
 ]
 all = [
@@ -142,7 +141,6 @@ select = [
 ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
     "UP007", # Use X | Y for type annotations (conflicts with Python 3.11 compatibility)
     "UP038", # Use X | Y in isinstance call instead of (X, Y) - keep tuple syntax for isinstance
     "I001",  # Import block is un-sorted (handled by isort)
