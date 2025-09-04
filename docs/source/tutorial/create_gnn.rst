@@ -155,7 +155,7 @@ In analogy to the GCN layer, we can use the :class:`~jraphx.nn.conv.message_pass
 
             return self.propagate(edge_index, x)
 
-        def message(self, x_j, x_i):
+        def message(self, x_j, x_i, edge_attr=None):
             # x_i has shape [E, in_features]
             # x_j has shape [E, in_features]
 
@@ -227,6 +227,4 @@ Try to answer the following questions related to :class:`~jraphx.nn.conv.EdgeCon
 
 2. What does :obj:`jnp.concatenate([x_i, x_j - x_i], axis=1)` do? Why :obj:`axis = 1`?
 
-3. How can you make the EdgeConv implementation JIT-compilable with :obj:`@jax.jit`?
-
-4. Implement a vectorized version of EdgeConv that processes multiple graphs using :obj:`nnx.vmap`.
+3. Implement a vectorized version of EdgeConv that processes multiple graphs using :obj:`nnx.vmap`.
