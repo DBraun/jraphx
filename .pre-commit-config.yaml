@@ -1,0 +1,63 @@
+repos:
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+
+  # Python code formatting with Black
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ['--line-length=100']
+
+  # Import sorting with isort
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile=black', '--line-length=100']
+
+  # Fast Python linting with Ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ruff
+        args: ['--fix', '--exit-non-zero-on-fix']
+
+  # Custom hook to prevent imports within functions
+  - repo: local
+    hooks:
+      - id: check-no-imports-in-functions
+        name: Check for imports in functions
+        entry: .pre-commit-hooks/check_no_imports_in_functions.py
+        language: script
+        files: \.py$
+        exclude: ^(tests/)
+
+# Configuration
+default_language_version:
+  python: python3
+
+# Files to exclude globally
+exclude: |
+  (?x)^(
+    docs/build/|
+    dist/|
+    \.eggs/|
+    \.git/|
+    \.mypy_cache/|
+    \.pytest_cache/|
+    \.ruff_cache/|
+    \.venv/|
+    build/|
+    __pycache__/
+  )
