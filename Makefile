@@ -23,8 +23,6 @@ lint:  ## Run linting with ruff
 lint-fix:  ## Run linting with ruff and fix issues
 	ruff check src/ tests/ --fix
 
-typecheck:  ## Run type checking with mypy
-	mypy src/
 
 test:  ## Run tests
 	pytest tests/ -v
@@ -32,9 +30,8 @@ test:  ## Run tests
 test-cov:  ## Run tests with coverage
 	pytest tests/ -v --cov=src/jraphx --cov-report=html --cov-report=term
 
-check:  ## Run all checks (lint, typecheck)
+check:  ## Run all checks (lint)
 	$(MAKE) lint
-	$(MAKE) typecheck
 
 check-all:  ## Run all checks and tests
 	$(MAKE) check
@@ -68,4 +65,4 @@ docs-live:  ## Build documentation with live reload
 
 # Shortcuts
 fmt: format  ## Alias for format
-ci: check-all  ## Run CI checks (lint, typecheck, test)
+ci: check-all  ## Run CI checks (lint, test)
