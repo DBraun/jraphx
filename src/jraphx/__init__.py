@@ -1,12 +1,13 @@
-"""JraphX: JAX Graph Extensions - A lightweight GNN library for JAX/Flax NNX.
+"""JraphX: Graph Neural Networks with JAX/NNX.
 
 JraphX provides graph neural network layers and utilities for JAX,
 serving as an unofficial successor to DeepMind's archived jraph library.
+It is derived from PyTorch Geometric code and documentation.
 """
 
 __version__ = "0.0.1"
 
-# Import submodules (users should import from these)
+# Import submodules
 import jraphx.data
 import jraphx.nn
 import jraphx.utils
