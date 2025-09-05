@@ -72,7 +72,7 @@ If you want to write your indices this way, you should transpose it before passi
 Although the graph has only two edges, we need to define four index tuples to account for both directions of a edge.
 
 .. Note::
-    You can print out your data object anytime and receive a short information about its attributes and their shapes.
+    You can print out your data object anytime and receive information about its attributes and their shapes.
 
 Note that it is necessary that the elements in :obj:`edge_index` only hold indices in the range :obj:`{ 0, ..., num_nodes - 1}`.
 This is needed as we want our final data representation to be as compact as possible, *e.g.*, we want to index the source and destination node features of the first edge :obj:`(0, 1)` via :obj:`x[0]` and :obj:`x[1]`, respectively.

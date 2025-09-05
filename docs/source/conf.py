@@ -28,8 +28,7 @@ extensions = [
 ]
 
 # Use Read the Docs theme
-html_theme = "pyg_sphinx_theme"
-# Remove PyG-specific branding
+html_theme = "sphinx_rtd_theme"
 # html_logo = None
 # html_favicon = None
 html_static_path = ["_static"]

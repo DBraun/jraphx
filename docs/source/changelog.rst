@@ -1,7 +1,7 @@
 Changelog
 =========
 
-Version 0.0.1
+Version 0.0.3
 -------------
 
 Initial release of JraphX.
@@ -64,5 +64,4 @@ Features
 * Extensive use of ``jax.vmap`` and ``nnx.vmap`` for efficient parallel processing of graph batches
 * Memory-efficient training patterns using ``jax.lax.scan`` and ``nnx.scan`` for sequential operations
 * JIT compilation support for all operations with optimized JAX primitives
-* Native integration with Flax NNX for modern JAX neural network development
 * Efficient scatter operations using JAX's advanced indexing (``at[].add/max/min``) for high-performance aggregation

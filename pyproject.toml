@@ -66,6 +66,7 @@ docs = [
     "sphinx==5.1.1",
     "sphinx-autodoc-typehints==1.19.2",
     "sphinx-copybutton>=0.5.2",
+    "sphinx-rtd-theme"
 ]
 all = [
     "jraphx[dev,test,examples,docs]",
