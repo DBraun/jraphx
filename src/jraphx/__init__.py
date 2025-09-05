@@ -5,7 +5,7 @@ serving as an unofficial successor to DeepMind's archived jraph library.
 It is derived from PyTorch Geometric code and documentation.
 """
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 # Import submodules
 import jraphx.data

@@ -66,7 +66,6 @@ docs = [
     "sphinx==5.1.1",
     "sphinx-autodoc-typehints==1.19.2",
     "sphinx-copybutton>=0.5.2",
-    "pyg-sphinx-theme @ git+https://github.com/pyg-team/pyg_sphinx_theme.git",
 ]
 all = [
     "jraphx[dev,test,examples,docs]",

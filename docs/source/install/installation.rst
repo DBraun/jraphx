@@ -6,25 +6,44 @@ Installation
 Quick Start
 -----------
 
-**Option 1: Manual Installation**
+**Option 1: Install from PyPI (Recommended)**
 
-Follow the `official JAX installation guide <https://docs.jax.dev/en/latest/installation.html>`__ to install JAX for your platform (CPU, GPU, or TPU).
+Install JraphX directly from PyPI:
 
-**Option 2: JAX AI Stack**
+.. code-block:: bash
 
-An easy way to get started is with the `JAX AI Stack repository <https://github.com/jax-ml/jax-ai-stack>`__, which includes JAX, Flax, Optax, and other ML libraries. However, we don't recommend this approach yet, since we need Flax 0.11.2, and jax-ai-stack 2025.9.3 is pinned to exactly 0.11.1.
+   pip install jraphx
+
+This will automatically install the required dependencies: JAX, Flax, and NumPy.
+
+**Option 2: JAX AI Stack + JraphX**
+
+The `JAX AI Stack <https://github.com/jax-ml/jax-ai-stack>`__ provides a curated collection of JAX, Flax, Optax, and other ML libraries. After installing it, you can add JraphX:
 
 .. code-block:: bash
 
    pip install jax-ai-stack
+   pip install jraphx
 
-Install JraphX
---------------
+.. note::
+   **Current Compatibility Issue:** This approach currently won't work because JraphX requires Flax 0.11.2 or higher, but jax-ai-stack 2025.9.3 is pinned to exactly Flax 0.11.1. We're waiting for JAX AI Stack to update their Flax version.
 
-Clone the JraphX repository and install in development mode:
+Development Installation
+------------------------
+
+For development or to get the latest features, clone the repository and install in development mode:
 
 .. code-block:: bash
 
+   git clone https://github.com/DBraun/jraphx.git
+   cd jraphx
+   pip install -e .
+
+You can also use this approach after installing JAX AI Stack (once the Flax compatibility issue is resolved):
+
+.. code-block:: bash
+
+   pip install jax-ai-stack  # once Flax 0.11.2+ is supported
    git clone https://github.com/DBraun/jraphx.git
    cd jraphx
    pip install -e .
