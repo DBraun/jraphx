@@ -133,7 +133,7 @@ For graph-level properties (like graph classification targets), **JraphX** handl
 
     # Create graphs with graph-level targets
     graphs_with_targets = []
-    rngs = nnx.Rngs(0, targets=1)  # Use Flax 0.11.2 shorthand
+    rngs = nnx.Rngs(0, targets=1)  # Use Flax NNX shorthand
 
     for i in range(10):
         x = rngs.normal((5, 16))  # Node features

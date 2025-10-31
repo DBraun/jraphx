@@ -1,6 +1,15 @@
 Changelog
 =========
 
+Version 0.0.4
+-------------
+
+**Breaking Changes**
+
+* Updated minimum Flax requirement to 0.12.0 for improved pytree handling:
+* * Now uses ``nnx.List`` for module lists
+* * Now uses ``nnx.data(None)`` for optional module attributes
+
 Version 0.0.3
 -------------
 

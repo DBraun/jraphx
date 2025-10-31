@@ -91,8 +91,8 @@ class BatchNorm(nnx.Module):
         feature_shape = (num_features,)
 
         # Learnable parameters
-        self.weight: nnx.Param | None = None
-        self.bias: nnx.Param | None = None
+        self.weight: nnx.Param = nnx.data(None)
+        self.bias: nnx.Param = nnx.data(None)
 
         if use_scale or use_bias:
             if rngs is not None:
@@ -115,9 +115,9 @@ class BatchNorm(nnx.Module):
             self.running_var = nnx.Variable(jnp.ones(num_features))
             self.num_batches_tracked = nnx.Variable(jnp.array(0, dtype=jnp.int32))
         else:
-            self.running_mean = None
-            self.running_var = None
-            self.num_batches_tracked = None
+            self.running_mean = nnx.data(None)
+            self.running_var = nnx.data(None)
+            self.num_batches_tracked = nnx.data(None)
 
     def __call__(
         self,

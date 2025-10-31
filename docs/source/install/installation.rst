@@ -26,7 +26,7 @@ The `JAX AI Stack <https://github.com/jax-ml/jax-ai-stack>`__ provides a curated
    pip install jraphx
 
 .. note::
-   **Current Compatibility Issue:** This approach currently won't work because JraphX requires Flax 0.11.2 or higher, but jax-ai-stack 2025.9.3 is pinned to exactly Flax 0.11.1. We're waiting for JAX AI Stack to update their Flax version.
+   JraphX requires Flax 0.12.0 or higher. JAX AI Stack 2025.10.28 and later includes Flax 0.12.0, so this installation method works.
 
 Development Installation
 ------------------------
@@ -39,11 +39,11 @@ For development or to get the latest features, clone the repository and install 
    cd jraphx
    pip install -e .
 
-You can also use this approach after installing JAX AI Stack (once the Flax compatibility issue is resolved):
+You can also use this approach after installing JAX AI Stack:
 
 .. code-block:: bash
 
-   pip install jax-ai-stack  # once Flax 0.11.2+ is supported
+   pip install jax-ai-stack
    git clone https://github.com/DBraun/jraphx.git
    cd jraphx
    pip install -e .

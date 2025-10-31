@@ -1,5 +1,6 @@
 """Graph Convolutional Network (GCN) layer implementation with optimizations."""
 
+from flax import nnx
 from flax.nnx import Linear, Rngs, Variable
 from jax import numpy as jnp
 from jax.ops import segment_sum
@@ -125,9 +126,9 @@ class GCNConv(MessagePassing):
             self._cached_edge_weight = Variable(None)
             self._cached_num_nodes = Variable(None)
         else:
-            self._cached_edge_index = None
-            self._cached_edge_weight = None
-            self._cached_num_nodes = None
+            self._cached_edge_index = nnx.data(None)
+            self._cached_edge_weight = nnx.data(None)
+            self._cached_num_nodes = nnx.data(None)
 
     def gcn_norm(
         self,

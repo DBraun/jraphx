@@ -3,6 +3,7 @@
 from typing import Literal, Union
 
 import jax.numpy as jnp
+from flax import nnx
 from flax.nnx import Linear, Param, Rngs
 
 from jraphx.nn.conv.message_passing import MessagePassing
@@ -98,7 +99,7 @@ class SAGEConv(MessagePassing):
                 use_bias=bias,
                 rngs=rngs,
             )
-            self.lin_r = None
+            self.lin_r = nnx.data(None)
         else:
             # Separate transformations for neighbors and self
             self.lin = Linear(
@@ -117,12 +118,12 @@ class SAGEConv(MessagePassing):
                     rngs=rngs,
                 )
             else:
-                self.lin_r = None
+                self.lin_r = nnx.data(None)
                 # Add bias manually if no root weight
                 if bias:
                     self.bias = Param(jnp.zeros((out_features,)))
                 else:
-                    self.bias = None
+                    self.bias = nnx.data(None)
 
     def __call__(
         self,

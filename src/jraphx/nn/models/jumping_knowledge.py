@@ -86,9 +86,9 @@ class JumpingKnowledge(nnx.Module):
         else:
             self.features = None
             self.num_layers = None
-            self.rnn_forward = None
-            self.rnn_backward = None
-            self.att = None
+            self.rnn_forward = nnx.data(None)
+            self.rnn_backward = nnx.data(None)
+            self.att = nnx.data(None)
 
     def __call__(self, xs: list[jnp.ndarray]) -> jnp.ndarray:
         """Forward pass.

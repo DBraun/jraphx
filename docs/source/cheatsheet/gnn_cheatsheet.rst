@@ -256,10 +256,10 @@ JAX-Specific Optimizations
         optimizer.update(model, grads)
         return loss
 
-Random Number Generation (Flax 0.11.2)
+Random Number Generation (Flax NNX)
 --------------------------------------
 
-Use modern **Flax 0.11.2** Rngs shorthand methods for cleaner code:
+Use modern **Flax NNX** Rngs shorthand methods for cleaner code:
 
 .. code-block:: python
 

@@ -111,7 +111,7 @@ class MLP(nnx.Module):
         self.norm_type = norm
 
         # Create linear layers
-        self.lins = []
+        self.lins = nnx.List([])
         for _, (in_feat, out_feat) in enumerate(
             zip(self.feature_list[:-1], self.feature_list[1:], strict=False)
         ):
@@ -125,7 +125,7 @@ class MLP(nnx.Module):
             )
 
         # Create normalization layers
-        self.norms = []
+        self.norms = nnx.List([])
         iterator = self.feature_list[1:-1] if plain_last else self.feature_list[1:]
         for hidden_feat in iterator:
             if norm == "batch_norm":

@@ -157,10 +157,10 @@ Use :obj:`nnx.scan` for memory-efficient processing of deep networks:
     deep_model = DeepGNN(16, 64, 7, 10, rngs=nnx.Rngs(42))
     deep_predictions = deep_model(data)
 
-Random Number Generation with Flax 0.11.2
+Random Number Generation with Flax NNX
 ------------------------------------------
 
-**Flax 0.11.2** introduces convenient shorthand methods for random number generation directly on :class:`nnx.Rngs` objects:
+**Flax NNX** introduces convenient shorthand methods for random number generation directly on :class:`nnx.Rngs` objects:
 
 .. code-block:: python
 
@@ -212,7 +212,7 @@ Here's a complete example showing how to train on multiple graphs efficiently:
     rngs = nnx.Rngs(0, params=1)  # Separate keys for different purposes
     train_graphs = []
     for i in range(100):
-        # Use Rngs shorthand methods (Flax 0.11.2 feature)
+        # Use Rngs shorthand methods (Flax NNX feature)
         n_nodes = rngs.randint((), 10, 50)  # Much cleaner than random.randint!
         x = rngs.params.normal((n_nodes, 16))  # Use params key for features
         # Create random edges (simplified)

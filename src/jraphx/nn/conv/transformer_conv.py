@@ -118,19 +118,19 @@ class TransformerConv(MessagePassing):
         if edge_dim is not None:
             self.lin_edge = nnx.Linear(edge_dim, heads * out_features, use_bias=False, rngs=rngs)
         else:
-            self.lin_edge = None
+            self.lin_edge = nnx.data(None)
 
         # Skip connection transformation
         if root_weight:
             self.lin_skip = nnx.Linear(in_features, heads * out_features, use_bias=True, rngs=rngs)
         else:
-            self.lin_skip = None
+            self.lin_skip = nnx.data(None)
 
         # Beta gating parameter
         if beta:
             self.lin_beta = nnx.Linear(3 * heads * out_features, 1, use_bias=False, rngs=rngs)
         else:
-            self.lin_beta = None
+            self.lin_beta = nnx.data(None)
 
         # Output projection
         if concat:

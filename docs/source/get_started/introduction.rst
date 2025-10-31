@@ -416,7 +416,7 @@ For more complex preprocessing pipelines, you can compose functions:
 
     def add_positional_encoding(data, rngs, dim=16):
         """Add random positional encoding to nodes."""
-        pos_enc = rngs.normal((data.x.shape[0], dim))  # Flax 0.11.2 shorthand method!
+        pos_enc = rngs.normal((data.x.shape[0], dim))  # Flax NNX shorthand method!
         x_with_pos = jnp.concatenate([data.x, pos_enc], axis=1)
         return data.replace(x=x_with_pos)
 

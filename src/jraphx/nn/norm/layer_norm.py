@@ -89,8 +89,8 @@ class LayerNorm(nnx.Module):
         self.use_fast_variance = use_fast_variance
 
         # Learnable parameters - maintain backward compatibility with elementwise_affine
-        self.weight: nnx.Param | None = None
-        self.bias: nnx.Param | None = None
+        self.weight: nnx.Param = nnx.data(None)
+        self.bias: nnx.Param = nnx.data(None)
 
         if elementwise_affine and (use_bias or use_scale):
             if rngs is not None:

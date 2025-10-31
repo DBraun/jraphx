@@ -2,6 +2,7 @@
 
 from typing import Union
 
+from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers, leaky_relu
 from jax import numpy as jnp
 
@@ -171,7 +172,7 @@ class GATv2Conv(MessagePassing):
                 rngs=rngs,
             )
         else:
-            self.lin_edge = None
+            self.lin_edge = nnx.data(None)
 
         # Residual connection
         total_out_features = heads * out_features if concat else out_features
@@ -184,16 +185,16 @@ class GATv2Conv(MessagePassing):
                 rngs=rngs,
             )
         else:
-            self.res = None
+            self.res = nnx.data(None)
 
         # Bias (applied after aggregation)
         if bias and not isinstance(in_features, int):
             # For bipartite graphs, bias is handled by lin_l and lin_r
-            self.bias = None
+            self.bias = nnx.data(None)
         elif bias:
             self.bias = Param(jnp.zeros((total_out_features,)))
         else:
-            self.bias = None
+            self.bias = nnx.data(None)
 
         # Dropout
         if dropout > 0:

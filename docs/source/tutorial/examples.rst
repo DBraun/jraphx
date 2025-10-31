@@ -85,7 +85,7 @@ Complete example for node classification:
 
     # Create synthetic data
     def create_synthetic_data(num_nodes=100, num_features=16, num_classes=4):
-        # Use modern Flax 0.11.2 Rngs shorthand methods
+        # Use modern Flax NNX Rngs shorthand methods
         rngs = nnx.Rngs(42)
 
         # Random features
@@ -201,7 +201,7 @@ Example for classifying entire graphs:
     def create_graph_dataset(num_graphs=100, num_classes=2):
         graphs = []
         for i in range(num_graphs):
-            # Use modern Flax 0.11.2 patterns with different keys for each graph
+            # Use modern Flax NNX patterns with different keys for each graph
             rngs = nnx.Rngs(i)
             num_nodes = rngs.randint((), 10, 30)
 
@@ -276,7 +276,7 @@ Link prediction using node embeddings:
         num_edges = data.edge_index.shape[1]
         num_train = int(train_ratio * num_edges)
 
-        # Shuffle edges using modern Flax 0.11.2 patterns
+        # Shuffle edges using modern Flax NNX patterns
         rngs = nnx.Rngs(42)
         perm = rngs.permutation(jnp.arange(num_edges))
 

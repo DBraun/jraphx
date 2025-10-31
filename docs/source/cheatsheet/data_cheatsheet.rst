@@ -372,7 +372,7 @@ JraphX normalization layers (BatchNorm, LayerNorm) follow Flax NNX conventions w
 
 This integration allows you to leverage the extensive PyG dataset collection while using **JraphX**'s JAX-optimized graph neural networks.
 
-Data Augmentation with Flax 0.11.2
+Data Augmentation with Flax NNX
 -----------------------------------
 
 Use the new Rngs shorthand methods for data augmentation and preprocessing:
@@ -387,7 +387,7 @@ Use the new Rngs shorthand methods for data augmentation and preprocessing:
         # Add random noise to node features (traditional approach)
         # noise = random.normal(rngs(), data.x.shape) * 0.1
 
-        # Use shorthand methods instead (Flax 0.11.2)
+        # Use shorthand methods instead (Flax NNX)
         noise = rngs.normal(data.x.shape) * 0.1
         x_noisy = data.x + noise
 

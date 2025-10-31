@@ -80,7 +80,7 @@ class BasicGNN(nnx.Module):
             self.dropout = None
 
         # Create convolution layers
-        self.convs = []
+        self.convs = nnx.List([])
 
         # First layer
         if num_layers > 0:
@@ -104,7 +104,7 @@ class BasicGNN(nnx.Module):
                 )
 
         # Create normalization layers
-        self.norms = []
+        self.norms = nnx.List([])
         for i in range(num_layers):
             # Determine the number of features for this layer
             if i == num_layers - 1 and out_features is not None and jk is None:

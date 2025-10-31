@@ -2,6 +2,7 @@
 
 from typing import Union
 
+from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers
 from jax import numpy as jnp
 
@@ -123,7 +124,7 @@ class GATConv(MessagePassing):
         self.residual = residual
 
         # Handle bipartite graphs
-        self.lin = self.lin_src = self.lin_dst = None
+        self.lin = self.lin_src = self.lin_dst = nnx.data(None)
         if isinstance(in_features, int):
             self.lin = Linear(
                 in_features,
@@ -162,8 +163,8 @@ class GATConv(MessagePassing):
                 initializers.glorot_uniform()(rngs.params(), (heads, out_features))
             )
         else:
-            self.lin_edge = None
-            self.att_edge = None
+            self.lin_edge = nnx.data(None)
+            self.att_edge = nnx.data(None)
 
         # Residual connection
         total_out_features = heads * out_features if concat else out_features
@@ -176,13 +177,13 @@ class GATConv(MessagePassing):
                 rngs=rngs,
             )
         else:
-            self.res = None
+            self.res = nnx.data(None)
 
         # Bias
         if bias:
             self.bias = Param(jnp.zeros((total_out_features,)))
         else:
-            self.bias = None
+            self.bias = nnx.data(None)
 
         # Dropout
         if dropout > 0:
