@@ -1,6 +1,7 @@
 """Pre-built GNN models (GCN, GAT, GraphSAGE, GIN)."""
 
 from collections.abc import Callable
+from typing import Any
 
 import jax.numpy as jnp
 from flax import nnx
@@ -68,10 +69,19 @@ class GCN(BasicGNN):
             ValueError: If the model was not built with :obj:`cached=True`.
         """
         for conv in self.convs:
+            if not isinstance(conv, GCNConv):
+                raise RuntimeError(
+                    f"Expected every layer of a GCN to be a GCNConv, found "
+                    f"{type(conv).__name__}"
+                )
             conv.precompute_norm(edge_index, edge_weight, num_nodes, dtype)
 
     def init_conv(
-        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+        self,
+        in_features: int,
+        out_features: int,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ) -> MessagePassing:
         """Initialize GCNConv layer."""
         # Extract GCN-specific parameters
@@ -138,8 +148,9 @@ class GAT(BasicGNN):
         jk: str | None = None,
         residual: bool = False,
         edge_dim: int | None = None,
-        rngs: nnx.Rngs | None = None,
-        **kwargs,
+        *,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ):
         self.heads = heads
         self.concat = concat
@@ -168,7 +179,11 @@ class GAT(BasicGNN):
         )
 
     def init_conv(
-        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+        self,
+        in_features: int,
+        out_features: int,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ) -> MessagePassing:
         """Initialize GATConv or GATv2Conv layer."""
         Conv = GATv2Conv if self.v2 else GATConv
@@ -225,7 +240,11 @@ class GraphSAGE(BasicGNN):
     supports_edge_attr: bool = False
 
     def init_conv(
-        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+        self,
+        in_features: int,
+        out_features: int,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ) -> MessagePassing:
         """Initialize SAGEConv layer."""
         # Extract SAGE-specific parameters
@@ -273,7 +292,11 @@ class GIN(BasicGNN):
     supports_edge_attr: bool = False
 
     def init_conv(
-        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+        self,
+        in_features: int,
+        out_features: int,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ) -> MessagePassing:
         """Initialize GINConv layer."""
         # Extract GIN-specific parameters
@@ -282,6 +305,7 @@ class GIN(BasicGNN):
         # GINConv calls its MLP without a batch vector, so GraphNorm would pool
         # statistics over the whole disjoint union; use per-node LayerNorm there
         # and let GraphNorm act between the GIN blocks.
+        mlp_norm: str | None
         if self.norm_type == "graph_norm":
             mlp_norm = "layer_norm"
         else:

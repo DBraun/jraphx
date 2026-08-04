@@ -102,7 +102,8 @@ def scatter_add(
     Returns:
         jax.Array: Tensor with scattered values summed at each index.
     """
-    return _scatter_add(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jnp.ndarray = _scatter_add(src, index, _resolve_dim_size(index, dim_size), dim)
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
@@ -160,7 +161,8 @@ def scatter_mean(
     Returns:
         Tensor with scattered values
     """
-    return _scatter_mean(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jnp.ndarray = _scatter_mean(src, index, _resolve_dim_size(index, dim_size), dim)
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
@@ -221,7 +223,10 @@ def scatter_max(
     Returns:
         Tensor with scattered values
     """
-    return _scatter_max(src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value)
+    out: jnp.ndarray = _scatter_max(
+        src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value
+    )
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
@@ -286,7 +291,10 @@ def scatter_min(
     Returns:
         Tensor with scattered values
     """
-    return _scatter_min(src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value)
+    out: jnp.ndarray = _scatter_min(
+        src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value
+    )
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
@@ -456,7 +464,10 @@ def scatter_std(
     Returns:
         Tensor with scattered standard deviations
     """
-    return _scatter_std(src, index, _resolve_dim_size(index, dim_size), dim, unbiased=unbiased)
+    out: jnp.ndarray = _scatter_std(
+        src, index, _resolve_dim_size(index, dim_size), dim, unbiased=unbiased
+    )
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "unbiased"))
@@ -520,7 +531,8 @@ def scatter_logsumexp(
     Returns:
         Tensor with log-sum-exp aggregated values
     """
-    return _scatter_logsumexp(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jnp.ndarray = _scatter_logsumexp(src, index, _resolve_dim_size(index, dim_size), dim)
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
@@ -590,6 +602,7 @@ def scatter_fallback(
         dim_size = _resolve_dim_size(index, dim_size)
 
         # Initialize output
+        shape: tuple[int, ...]
         if src.ndim == 1:
             shape = (dim_size,)
         else:
@@ -612,6 +625,7 @@ def scatter_fallback(
             out = out / count
         elif reduce in ("max", "min"):
             is_max = reduce == "max"
+            extreme: int | float
             if jnp.issubdtype(src.dtype, jnp.integer):
                 extreme = jnp.iinfo(src.dtype).min if is_max else jnp.iinfo(src.dtype).max
             else:

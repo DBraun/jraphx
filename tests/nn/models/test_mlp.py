@@ -216,21 +216,28 @@ def test_mlp_bias():
 
 def test_mlp_error_cases():
     """Test MLP error handling."""
+    rngs = nnx.Rngs(42)
+
+    # `rngs` is required; omitting it is a TypeError at the call site rather than
+    # an AttributeError raised deep inside layer construction
+    with pytest.raises(TypeError, match="rngs"):
+        MLP([16, 32])
+
     # Should fail without feature_list or in_features
     with pytest.raises(ValueError):
-        MLP()
+        MLP(rngs=rngs)
 
     # Should fail without num_layers when using in_features
     with pytest.raises(ValueError):
-        MLP(in_features=16)
+        MLP(in_features=16, rngs=rngs)
 
     # Should fail without hidden_features for multi-layer network
     with pytest.raises(ValueError):
-        MLP(in_features=16, num_layers=3, out_features=32)
+        MLP(in_features=16, num_layers=3, out_features=32, rngs=rngs)
 
     # Should fail without out_features
     with pytest.raises(ValueError):
-        MLP(in_features=16, num_layers=2, hidden_features=32)
+        MLP(in_features=16, num_layers=2, hidden_features=32, rngs=rngs)
 
 
 def test_mlp_unknown_norm_raises():

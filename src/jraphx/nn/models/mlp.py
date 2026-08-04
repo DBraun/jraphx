@@ -76,7 +76,7 @@ class MLP(nnx.Module):
         norm: str | None = None,
         plain_last: bool = True,
         bias: bool = True,
-        rngs: nnx.Rngs | None = None,
+        rngs: nnx.Rngs,
     ):
         super().__init__()
 
@@ -95,8 +95,12 @@ class MLP(nnx.Module):
             if out_features is None:
                 raise ValueError("Argument `out_features` must be given")
 
-            feature_list = [hidden_features] * (num_layers - 1)
-            feature_list = [in_features] + feature_list + [out_features]
+            if in_features is None:
+                raise ValueError("Argument `in_features` must be given")
+            # `hidden_features` is only consulted when there is a hidden layer,
+            # which the check above already guarantees.
+            hidden_list = [] if hidden_features is None else [hidden_features] * (num_layers - 1)
+            feature_list = [in_features] + hidden_list + [out_features]
 
         if feature_list is None:
             raise ValueError("Either feature_list or in_features must be specified")
@@ -113,7 +117,7 @@ class MLP(nnx.Module):
         self.norm_type = norm
 
         # Create linear layers
-        self.lins = nnx.List([])
+        self.lins: nnx.List[nnx.Linear] = nnx.List([])
         for _, (in_feat, out_feat) in enumerate(
             zip(self.feature_list[:-1], self.feature_list[1:], strict=False)
         ):
@@ -135,8 +139,9 @@ class MLP(nnx.Module):
             )
 
         # Create normalization layers
-        self.norms = nnx.List([])
+        self.norms: nnx.List[BatchNorm | LayerNorm | None] = nnx.List([])
         iterator = self.feature_list[1:-1] if plain_last else self.feature_list[1:]
+        norm_layer: BatchNorm | LayerNorm | None
         for hidden_feat in iterator:
             if norm == "batch_norm":
                 norm_layer = BatchNorm(hidden_feat, rngs=rngs)
@@ -147,6 +152,7 @@ class MLP(nnx.Module):
             self.norms.append(norm_layer)
 
         # Create dropout
+        self.dropout: nnx.Dropout | None
         if dropout_rate > 0:
             self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
         else:
@@ -197,13 +203,13 @@ class MLP(nnx.Module):
                     x = self.act(x)
 
                 # Normalization
-                if i < len(self.norms) and self.norms[i] is not None:
+                if i < len(self.norms):
                     norm = self.norms[i]
-                    if self.norm_type == "batch_norm":
+                    if isinstance(norm, BatchNorm):
                         # BatchNorm pools over every node of the mini-batch and
                         # therefore has no segment count to make static
                         x = norm(x, batch)
-                    else:
+                    elif norm is not None:
                         x = norm(x, batch, batch_size)
 
                 # Activation (if not first)

@@ -51,11 +51,25 @@ class JumpingKnowledge(nnx.Module):
     ):
         super().__init__()
         self.mode = mode.lower()
-        assert self.mode in ["cat", "max", "lstm"], f"Invalid mode: {mode}"
+        if self.mode not in ["cat", "max", "lstm"]:
+            raise ValueError(f"Invalid mode: {mode}; expected one of 'cat', 'max', 'lstm'")
+
+        self.features: int | None
+        self.num_layers: int | None
+        self.rnn_forward: nnx.GRUCell | None
+        self.rnn_backward: nnx.GRUCell | None
+        self.att: nnx.Linear | None
 
         if self.mode == "lstm":
-            assert num_features is not None, "features cannot be None for lstm mode"
-            assert num_layers is not None, "num_layers cannot be None for lstm mode"
+            if num_features is None:
+                raise ValueError("'num_features' is required for mode='lstm'")
+            if num_layers is None:
+                raise ValueError("'num_layers' is required for mode='lstm'")
+            if rngs is None:
+                raise ValueError(
+                    "'rngs' is required for mode='lstm', which builds two GRU cells and "
+                    "an attention layer"
+                )
 
             self.features = num_features
             self.num_layers = num_layers
@@ -109,6 +123,16 @@ class JumpingKnowledge(nnx.Module):
             return jnp.max(stacked, axis=-1)  # [num_nodes, features]
 
         else:  # self.mode == "lstm"
+            # Set together with the mode in __init__; restated so that the types
+            # are narrowed for the rest of this branch.
+            if (
+                self.rnn_forward is None
+                or self.rnn_backward is None
+                or self.att is None
+                or self.num_layers is None
+            ):
+                raise RuntimeError("mode='lstm' requires the recurrent layers to be built")
+
             # Stack representations
             x = jnp.stack(xs, axis=1)  # [num_nodes, num_layers, features]
             num_nodes = x.shape[0]

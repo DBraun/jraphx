@@ -2,7 +2,7 @@
 
 import dataclasses
 import sys
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from flax.struct import dataclass
 from jax import numpy as jnp
@@ -166,7 +166,7 @@ class Batch(Data):
         num_graphs = len(data_list)
 
         # Collect all attributes in a dict first
-        batch_dict = {}
+        batch_dict: dict[str, Any] = {}
 
         # Collect all attribute keys
         keys = set()
@@ -174,9 +174,9 @@ class Batch(Data):
             keys.update(data.keys())
 
         # Get class-level batching configuration
-        node_index_fields = getattr(cls, "NODE_INDEX_FIELDS", set())
-        element_level_fields = getattr(cls, "ELEMENT_LEVEL_FIELDS", set())
-        graph_level_fields = getattr(cls, "GRAPH_LEVEL_FIELDS", set())
+        node_index_fields: set[str] = cls.NODE_INDEX_FIELDS
+        element_level_fields: set[str] = cls.ELEMENT_LEVEL_FIELDS
+        graph_level_fields: set[str] = cls.GRAPH_LEVEL_FIELDS
 
         # Lengths of the axes that non-batch-aligned attributes align with
         edge_counts = [
@@ -317,7 +317,7 @@ class Batch(Data):
         num_graphs = self.num_graphs
 
         # Determine the Data class to use for unbatching
-        data_class = getattr(type(self), "_DATA_CLASS", None)
+        data_class: type[Data] | None = type(self)._DATA_CLASS
         if data_class is None:
             # Fallback: try to find in same module
             if type(self).__name__.endswith("Batch"):
@@ -328,9 +328,9 @@ class Batch(Data):
                 data_class = Data
 
         # Get batching configuration
-        node_index_fields = getattr(type(self), "NODE_INDEX_FIELDS", set())
-        element_level_fields = getattr(type(self), "ELEMENT_LEVEL_FIELDS", set())
-        graph_level_fields = getattr(type(self), "GRAPH_LEVEL_FIELDS", set())
+        node_index_fields: set[str] = type(self).NODE_INDEX_FIELDS
+        element_level_fields: set[str] = type(self).ELEMENT_LEVEL_FIELDS
+        graph_level_fields: set[str] = type(self).GRAPH_LEVEL_FIELDS
 
         # Find the primary node index field that element-level data aligns with
         # (Usually the only one, like 'face' for face-level attributes)

@@ -41,8 +41,6 @@ jobs:
   typecheck:
     name: Type check with mypy
     runs-on: ubuntu-latest
-    # mypy does not pass yet; this job reports without gating merges or releases.
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +144,7 @@ jobs:
           pytest tests/ -v
 
   upload_pypi:
-    needs: [lint, build_wheel, build_sdist, test, test_minimum_versions]
+    needs: [lint, typecheck, build_wheel, build_sdist, test, test_minimum_versions]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:

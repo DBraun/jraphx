@@ -209,7 +209,7 @@ class Data:
 
         # Get unique nodes that appear in edges
         unique_nodes = jnp.unique(edge_index_no_loops.flatten())
-        return unique_nodes.size < self.num_nodes
+        return bool(unique_nodes.size < self.num_nodes)
 
     def has_self_loops(self) -> bool:
         """Check if the graph has self-loops.

@@ -58,6 +58,7 @@ class GINConv(MessagePassing):
         self.initial_eps = eps
 
         # Make epsilon learnable if requested
+        self.eps: Param | float
         if train_eps:
             self.eps = Param(jnp.array([eps]))
         else:
@@ -82,6 +83,7 @@ class GINConv(MessagePassing):
             [num_dst_nodes, out_features] for bipartite input
         """
         # Get epsilon value
+        eps: jnp.ndarray | float
         if isinstance(self.eps, Param):
             eps = self.eps[0]
         else:
@@ -100,9 +102,9 @@ class GINConv(MessagePassing):
         out = (1 + eps) * x_dst + out
 
         # Apply MLP
-        out = self.nn(out)
+        out_features: jnp.ndarray = self.nn(out)
 
-        return out
+        return out_features
 
     def message(
         self,

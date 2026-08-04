@@ -165,19 +165,23 @@ def test_lstm_matches_explicit_scan():
 
 def test_invalid_mode():
     """Test that invalid modes raise appropriate errors."""
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Invalid mode"):
         JumpingKnowledge("invalid_mode")
 
 
 def test_lstm_mode_requirements():
     """Test that LSTM mode requires proper parameters."""
     # Should fail without num_features
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="num_features"):
         JumpingKnowledge("lstm")
 
     # Should fail without num_layers
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="num_layers"):
         JumpingKnowledge("lstm", num_features=10)
+
+    # Should fail without rngs, which mode='lstm' needs to build its GRU cells
+    with pytest.raises(ValueError, match="rngs"):
+        JumpingKnowledge("lstm", num_features=10, num_layers=3)
 
     # Should work with both parameters
     model = JumpingKnowledge("lstm", num_features=10, num_layers=3, rngs=nnx.Rngs(42))

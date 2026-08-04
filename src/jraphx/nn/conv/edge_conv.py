@@ -53,12 +53,23 @@ class EdgeConv(MessagePassing):
     def message(
         self,
         x_j: jnp.ndarray,
-        x_i: jnp.ndarray,
+        x_i: jnp.ndarray | None = None,
         edge_attr: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
-        """Compute messages using edge features (x_i, x_j - x_i)."""
+        """Compute messages using edge features (x_i, x_j - x_i).
+
+        Raises:
+            RuntimeError: If ``x_i`` is missing. Unlike most layers, EdgeConv needs
+                both endpoints, since it operates on the difference between them.
+        """
+        if x_i is None:
+            raise RuntimeError(
+                "EdgeConv.message() requires the target features 'x_i'; it operates "
+                "on the difference between the two endpoints of each edge"
+            )
         # Concatenate [x_i, x_j - x_i] and pass through network
-        return self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+        out: jnp.ndarray = self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+        return out
 
     def __call__(
         self,

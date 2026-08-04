@@ -24,6 +24,23 @@ migrations listed below.
 
 **Breaking Changes -- Public API**
 
+* ``rngs`` is a required keyword-only argument of every layer that owns parameters:
+  ``GCNConv``, ``GATConv``, ``GATv2Conv``, ``SAGEConv``, ``TransformerConv``, ``MLP``,
+  ``BasicGNN`` and its ``GCN``/``GAT``/``GraphSAGE``/``GIN`` specialisations, and
+  ``BasicGNN.init_conv``. Every one of these already failed without it, with an
+  unhelpful ``AttributeError: 'NoneType' object has no attribute 'params'`` raised from
+  inside layer construction; the failure is now a ``TypeError`` at the call site naming
+  the missing argument. ``TransformerConv`` additionally used to fall back to a fixed
+  ``nnx.Rngs(0)``, so two layers built without ``rngs`` silently shared an
+  initialization -- that fallback is gone.
+* ``JumpingKnowledge(mode="lstm")`` raises ``ValueError`` when ``num_features``,
+  ``num_layers`` or ``rngs`` is missing, instead of ``AssertionError`` (which vanishes
+  under ``python -O``) or, for ``rngs``, an ``AttributeError``. Layers whose parameters
+  do not need a key -- ``BatchNorm``, ``LayerNorm``, ``GraphNorm``, ``GINConv``,
+  ``EdgeConv``, and ``JumpingKnowledge`` in ``cat``/``max`` mode -- still accept none.
+* ``TransformerConv.message`` is renamed to ``_attention_message``. It never
+  implemented the :meth:`MessagePassing.message` contract: it takes projected
+  query/key/value tensors and is not reached through ``propagate``.
 * ``GCNConv(cached=True)`` no longer fills its cache on the first forward pass. Call
   ``conv.precompute_norm(edge_index, edge_weight=None, num_nodes=None)`` once, outside
   of any JAX transformation, before the first forward pass; otherwise the layer raises
@@ -135,6 +152,10 @@ Trained weights still load (subject to the state-layout notes above), but output
 * ``add_self_loops`` with a string ``fill_value`` no longer requires ``num_nodes``.
 
 **Other Changes**
+
+* ``mypy src/`` passes under the project's strict configuration and is a required CI
+  check. It previously had no execution path at all -- no CI job, no ``typecheck`` Make
+  rule -- and reported 118 errors, among them the missing-``rngs`` crashes above.
 
 * ``GCN`` gains ``precompute_norm(edge_index, edge_weight=None, num_nodes=None)``, which
   fills the cache of every ``GCNConv`` layer at once. It must be called eagerly before

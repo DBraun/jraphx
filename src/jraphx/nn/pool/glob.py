@@ -393,10 +393,8 @@ def batch_histogram(
         Histogram features [batch_size, bins * num_features]
     """
     # Determine value range
-    if min_val is None:
-        min_val = x.min()
-    if max_val is None:
-        max_val = x.max()
+    lo = x.min() if min_val is None else min_val
+    hi = x.max() if max_val is None else max_val
 
     # Handle single graph
     if batch is None:
@@ -409,7 +407,7 @@ def batch_histogram(
     output = jnp.zeros((batch_size, bins * num_features))
 
     # Compute bin edges
-    bin_edges = jnp.linspace(min_val, max_val, bins + 1)
+    bin_edges = jnp.linspace(lo, hi, bins + 1)
 
     # Process each feature and graph
     for feat_idx in range(num_features):

@@ -28,7 +28,7 @@ lint:  ## Run linting with ruff
 lint-fix:  ## Run linting with ruff and fix issues
 	ruff check src/ tests/ --fix
 
-typecheck:  ## Run static type checking with mypy (not yet clean, not wired into check)
+typecheck:  ## Run static type checking with mypy
 	mypy src/
 
 test:  ## Run tests
@@ -37,9 +37,10 @@ test:  ## Run tests
 test-cov:  ## Run tests with coverage
 	pytest tests/ -v --cov=src/jraphx --cov-report=html --cov-report=term
 
-check:  ## Run lint and formatting checks
+check:  ## Run lint, formatting and type checks
 	$(MAKE) lint
 	$(MAKE) format-check
+	$(MAKE) typecheck
 
 check-all:  ## Run all checks and tests
 	$(MAKE) check

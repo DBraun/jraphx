@@ -4,7 +4,7 @@ This module provides an optimized base class for message passing operations
 using JAX's efficient indexing and gathering operations.
 """
 
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 import jax.numpy as jnp
 from flax.nnx import Module
@@ -282,25 +282,28 @@ class MessagePassing(Module):
             f"{type(self).__name__} does not implement a fused `message_and_aggregate`"
         )
 
-    def __call__(
-        self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-        size: tuple[int, int] | None = None,
-    ) -> jnp.ndarray:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Forward pass through the message passing layer.
 
+        This default forwards its arguments straight to :meth:`propagate`, whose
+        signature is ``(edge_index, x, edge_attr=None, size=None)``.
+
+        Every concrete layer overrides this with its own signature, and those
+        signatures genuinely differ: :class:`GCNConv` takes ``edge_weight``,
+        :class:`GATConv` and :class:`GATv2Conv` return a ``(features, attention)``
+        tuple when asked for attention weights, and :class:`EdgeConv` accepts
+        precomputed neighbour indices. The layers are therefore not substitutable
+        for one another, and this base signature deliberately imposes no contract
+        beyond "callable". Consult the concrete layer's own annotations.
+
         Args:
-            x: Node features or tuple for bipartite graphs
-            edge_index: Edge indices [2, num_edges]
-            edge_attr: Optional edge features
-            size: Optional size for bipartite graphs
+            *args: Forwarded to :meth:`propagate`.
+            **kwargs: Forwarded to :meth:`propagate`.
 
         Returns:
-            Updated node features
+            Updated node features.
         """
-        return self.propagate(edge_index, x, edge_attr, size)
+        return self.propagate(*args, **kwargs)
 
 
 def create_edge_index_with_padding(

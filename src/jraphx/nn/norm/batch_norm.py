@@ -91,8 +91,8 @@ class BatchNorm(nnx.Module):
         feature_shape = (num_features,)
 
         # Learnable parameters
-        self.weight: nnx.Param = nnx.data(None)
-        self.bias: nnx.Param = nnx.data(None)
+        self.weight: nnx.Param | None = nnx.data(None)
+        self.bias: nnx.Param | None = nnx.data(None)
 
         if use_scale or use_bias:
             if rngs is not None:
@@ -110,6 +110,9 @@ class BatchNorm(nnx.Module):
                     self.bias = nnx.Param(jnp.zeros(feature_shape))
 
         # Running statistics
+        self.running_mean: nnx.BatchStat | None
+        self.running_var: nnx.BatchStat | None
+        self.num_batches_tracked: nnx.BatchStat | None
         if track_running_stats:
             self.running_mean = nnx.BatchStat(jnp.zeros(num_features))
             self.running_var = nnx.BatchStat(jnp.ones(num_features))
@@ -164,7 +167,11 @@ class BatchNorm(nnx.Module):
                 count = jnp.asarray(x.shape[0], dtype=var.dtype)
 
             # Update running statistics
-            if self.track_running_stats:
+            if (
+                self.running_mean is not None
+                and self.running_var is not None
+                and self.num_batches_tracked is not None
+            ):
                 # Running variance tracks the unbiased estimator, matching
                 # PyTorch/PyG, while normalization uses the biased one.
                 unbiased_var = var * count / jnp.maximum(count - 1.0, 1.0)
@@ -177,7 +184,7 @@ class BatchNorm(nnx.Module):
                 self.num_batches_tracked[...] += 1
         else:
             # Use running statistics
-            if self.track_running_stats:
+            if self.running_mean is not None and self.running_var is not None:
                 mean = self.running_mean[...]
                 var = self.running_var[...]
             else:

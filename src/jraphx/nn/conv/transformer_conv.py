@@ -93,8 +93,9 @@ class TransformerConv(MessagePassing):
         edge_dim: int | None = None,
         beta: bool = False,
         root_weight: bool = True,
-        rngs: nnx.Rngs = None,
         aggr: Literal["add", "mean", "max", "min"] = "add",
+        *,
+        rngs: nnx.Rngs,
     ):
         super().__init__(aggr=aggr)
 
@@ -107,26 +108,26 @@ class TransformerConv(MessagePassing):
         self.beta = beta
         self.root_weight = root_weight
 
-        if rngs is None:
-            rngs = nnx.Rngs(0)
-
         # Single linear transformation for queries, keys, and values
         # This is more efficient than three separate layers
         self.lin_qkv = nnx.Linear(in_features, 3 * heads * out_features, use_bias=False, rngs=rngs)
 
         # Edge feature projection
+        self.lin_edge: nnx.Linear | None
         if edge_dim is not None:
             self.lin_edge = nnx.Linear(edge_dim, heads * out_features, use_bias=False, rngs=rngs)
         else:
             self.lin_edge = nnx.data(None)
 
         # Skip connection transformation
+        self.lin_skip: nnx.Linear | None
         if root_weight:
             self.lin_skip = nnx.Linear(in_features, heads * out_features, use_bias=True, rngs=rngs)
         else:
             self.lin_skip = nnx.data(None)
 
         # Beta gating parameter
+        self.lin_beta: nnx.Linear | None
         if beta:
             self.lin_beta = nnx.Linear(3 * heads * out_features, 1, use_bias=False, rngs=rngs)
         else:
@@ -175,8 +176,8 @@ class TransformerConv(MessagePassing):
         )
 
         # Apply beta gating if enabled
-        if self.beta:
-            if self.root_weight:
+        if self.lin_beta is not None:
+            if self.lin_skip is not None:
                 root = self.lin_skip(x)
             else:
                 root = value
@@ -184,7 +185,7 @@ class TransformerConv(MessagePassing):
             beta_input = jnp.concatenate([root, out, root - out], axis=-1)
             beta = nnx.sigmoid(self.lin_beta(beta_input))
             out = beta * root + (1 - beta) * out
-        elif self.root_weight:
+        elif self.lin_skip is not None:
             out = out + self.lin_skip(x)
 
         # Average or concatenate heads
@@ -215,7 +216,7 @@ class TransformerConv(MessagePassing):
         value_j = jnp.take(value, row, axis=0)  # Source values
 
         # Compute messages with attention
-        messages = self.message(
+        messages = self._attention_message(
             query_i=query_i,
             key_j=key_j,
             value_j=value_j,
@@ -230,17 +231,22 @@ class TransformerConv(MessagePassing):
 
         return out
 
-    def message(
+    def _attention_message(
         self,
         query_i: jnp.ndarray,
         key_j: jnp.ndarray,
         value_j: jnp.ndarray,
+        index: jnp.ndarray,
         edge_attr: jnp.ndarray | None = None,
-        index: jnp.ndarray = None,
         ptr: jnp.ndarray | None = None,
         size_i: int | None = None,
     ) -> jnp.ndarray:
         """Compute messages with attention weights.
+
+        This layer computes attention over pre-projected query/key/value tensors
+        rather than raw node features, so it does not implement
+        :meth:`MessagePassing.message` and is not routed through
+        :meth:`MessagePassing.propagate`.
 
         Args:
             query_i: Query features of target nodes [E, H*C]

@@ -64,7 +64,8 @@ class SAGEConv(MessagePassing):
         normalize: bool = False,
         root_weight: bool = True,
         bias: bool = True,
-        rngs: Rngs | None = None,
+        *,
+        rngs: Rngs,
     ):
         """Initialize the GraphSAGE layer."""
         if aggr == "lstm":
@@ -76,6 +77,11 @@ class SAGEConv(MessagePassing):
             root_weight = False
         else:
             super().__init__(aggr=aggr)
+
+        # Declared up front so that every branch below agrees on the attribute
+        # types; `bias` is only replaced when this layer owns its own bias.
+        self.lin_r: Linear | None
+        self.bias: Param | None = nnx.data(None)
 
         self.in_features = in_features
         self.out_features = out_features
@@ -171,9 +177,9 @@ class SAGEConv(MessagePassing):
             out = self.propagate(edge_index, x_j, edge_attr, size)
 
             # Add transformed root features
-            if self.root_weight and x_dst is not None:
+            if self.lin_r is not None and x_dst is not None:
                 out = out + self.lin_r(x_dst)
-            elif hasattr(self, "bias") and self.bias is not None:
+            elif self.bias is not None:
                 out = out + self.bias[...]
 
         # L2 normalization

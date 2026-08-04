@@ -1,6 +1,6 @@
 """Graph Attention Network v2 (GATv2) layer implementation."""
 
-from typing import Union
+from typing import Literal, Union, overload
 
 from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers, leaky_relu
@@ -108,7 +108,8 @@ class GATv2Conv(MessagePassing):
         bias: bool = True,
         share_weights: bool = False,
         residual: bool = False,
-        rngs: Rngs | None = None,
+        *,
+        rngs: Rngs,
     ):
         """Initialize the GATv2 layer."""
         super().__init__(aggr="add")
@@ -164,6 +165,7 @@ class GATv2Conv(MessagePassing):
         self.att = Param(initializers.glorot_uniform()(rngs.params(), (heads, out_features)))
 
         # Edge feature transformation
+        self.lin_edge: Linear | None
         if edge_dim is not None:
             self.lin_edge = Linear(
                 edge_dim,
@@ -176,6 +178,7 @@ class GATv2Conv(MessagePassing):
 
         # Residual connection
         total_out_features = heads * out_features if concat else out_features
+        self.res: Linear | None
         if residual:
             res_in_features = in_features if isinstance(in_features, int) else in_features[1]
             self.res = Linear(
@@ -188,6 +191,7 @@ class GATv2Conv(MessagePassing):
             self.res = nnx.data(None)
 
         # Bias (applied after aggregation)
+        self.bias: Param | None
         if bias and not isinstance(in_features, int):
             # For bipartite graphs, bias is handled by lin_l and lin_r
             self.bias = nnx.data(None)
@@ -197,10 +201,30 @@ class GATv2Conv(MessagePassing):
             self.bias = nnx.data(None)
 
         # Dropout
+        self.dropout: Dropout | None
         if dropout > 0:
             self.dropout = Dropout(dropout, rngs=rngs)
         else:
             self.dropout = None
+
+    @overload
+    def __call__(
+        self,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        edge_index: jnp.ndarray,
+        edge_attr: jnp.ndarray | None = ...,
+        return_attention_weights: Literal[False] = ...,
+    ) -> jnp.ndarray: ...
+
+    @overload
+    def __call__(
+        self,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        edge_index: jnp.ndarray,
+        edge_attr: jnp.ndarray | None = ...,
+        *,
+        return_attention_weights: Literal[True],
+    ) -> tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]: ...
 
     def __call__(
         self,

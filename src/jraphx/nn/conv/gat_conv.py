@@ -1,6 +1,6 @@
 """Graph Attention Network (GAT) layer implementation."""
 
-from typing import Union
+from typing import Literal, Union, overload
 
 from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers
@@ -107,7 +107,8 @@ class GATConv(MessagePassing):
         fill_value: Union[float, str] = "mean",
         bias: bool = True,
         residual: bool = False,
-        rngs: Rngs | None = None,
+        *,
+        rngs: Rngs,
     ):
         """Initialize the GAT layer."""
         super().__init__(aggr="add")
@@ -124,6 +125,9 @@ class GATConv(MessagePassing):
         self.residual = residual
 
         # Handle bipartite graphs
+        self.lin: Linear | None
+        self.lin_src: Linear | None
+        self.lin_dst: Linear | None
         self.lin = self.lin_src = self.lin_dst = nnx.data(None)
         if isinstance(in_features, int):
             self.lin = Linear(
@@ -152,6 +156,8 @@ class GATConv(MessagePassing):
         self.att_dst = Param(initializers.glorot_uniform()(rngs.params(), (heads, out_features)))
 
         # Edge feature transformation and attention
+        self.lin_edge: Linear | None
+        self.att_edge: Param | None
         if edge_dim is not None:
             self.lin_edge = Linear(
                 edge_dim,
@@ -168,6 +174,7 @@ class GATConv(MessagePassing):
 
         # Residual connection
         total_out_features = heads * out_features if concat else out_features
+        self.res: Linear | None
         if residual:
             res_in_features = in_features if isinstance(in_features, int) else in_features[1]
             self.res = Linear(
@@ -180,16 +187,39 @@ class GATConv(MessagePassing):
             self.res = nnx.data(None)
 
         # Bias
+        self.bias: Param | None
         if bias:
             self.bias = Param(jnp.zeros((total_out_features,)))
         else:
             self.bias = nnx.data(None)
 
         # Dropout
+        self.dropout: Dropout | None
         if dropout > 0:
             self.dropout = Dropout(dropout, rngs=rngs)
         else:
             self.dropout = None
+
+    @overload
+    def __call__(
+        self,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        edge_index: jnp.ndarray,
+        edge_attr: jnp.ndarray | None = ...,
+        size: tuple[int, int] | None = ...,
+        return_attention_weights: Literal[False] = ...,
+    ) -> jnp.ndarray: ...
+
+    @overload
+    def __call__(
+        self,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        edge_index: jnp.ndarray,
+        edge_attr: jnp.ndarray | None = ...,
+        size: tuple[int, int] | None = ...,
+        *,
+        return_attention_weights: Literal[True],
+    ) -> tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]: ...
 
     def __call__(
         self,
@@ -215,6 +245,8 @@ class GATConv(MessagePassing):
         """
         # Handle bipartite graphs
         res = None
+        x_src: jnp.ndarray
+        x_dst: jnp.ndarray | None
         if isinstance(x, tuple):
             x_src, x_dst = x
             # Handle case where x_dst is None (source nodes only)
@@ -281,7 +313,7 @@ class GATConv(MessagePassing):
         alpha = alpha_src + alpha_dst  # [num_edges, heads]
 
         # Add edge feature attention if available
-        if edge_attr is not None and self.lin_edge is not None:
+        if edge_attr is not None and self.lin_edge is not None and self.att_edge is not None:
             if edge_attr.ndim == 1:
                 edge_attr = edge_attr.reshape(-1, 1)
             edge_feat = self.lin_edge(edge_attr)

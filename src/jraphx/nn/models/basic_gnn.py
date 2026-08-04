@@ -1,6 +1,7 @@
 """Basic GNN base class for pre-built models."""
 
 from collections.abc import Callable
+from typing import Any
 
 import jax.numpy as jnp
 from flax import nnx
@@ -66,8 +67,9 @@ class BasicGNN(nnx.Module):
         norm: str | None = None,
         jk: str | None = None,
         residual: bool = False,
-        rngs: nnx.Rngs | None = None,
-        **kwargs,
+        *,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ):
         super().__init__()
 
@@ -88,13 +90,14 @@ class BasicGNN(nnx.Module):
             self.out_features = hidden_features
 
         # Create dropout
+        self.dropout: nnx.Dropout | None
         if dropout_rate > 0:
             self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
         else:
             self.dropout = None
 
         # Create convolution layers
-        self.convs = nnx.List([])
+        self.convs: nnx.List[MessagePassing] = nnx.List([])
         if num_layers >= 1:
             layer_in = in_features
 
@@ -124,7 +127,8 @@ class BasicGNN(nnx.Module):
             )
 
         # Create normalization layers
-        self.norms = nnx.List([])
+        self.norms: nnx.List[BatchNorm | LayerNorm | GraphNorm | None] = nnx.List([])
+        norm_layer: BatchNorm | LayerNorm | GraphNorm | None
         for i in range(num_layers):
             # Determine the number of features for this layer
             if i == num_layers - 1 and out_features is not None and jk is None:
@@ -143,6 +147,7 @@ class BasicGNN(nnx.Module):
             self.norms.append(norm_layer)
 
         # Create JumpingKnowledge aggregation
+        self.jk: JumpingKnowledge | None
         if jk is not None and jk != "last":
             self.jk = JumpingKnowledge(
                 jk, num_features=hidden_features, num_layers=num_layers, rngs=rngs
@@ -151,6 +156,7 @@ class BasicGNN(nnx.Module):
             self.jk = None
 
         # Output projection for JumpingKnowledge
+        self.lin: nnx.Linear | None
         if jk is not None:
             if jk == "cat":
                 jk_features = num_layers * hidden_features
@@ -162,7 +168,11 @@ class BasicGNN(nnx.Module):
             self.lin = None
 
     def init_conv(
-        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+        self,
+        in_features: int,
+        out_features: int,
+        rngs: nnx.Rngs,
+        **kwargs: Any,
     ) -> MessagePassing:
         """Initialize convolution layer. To be implemented by subclasses."""
         raise NotImplementedError
@@ -240,14 +250,13 @@ class BasicGNN(nnx.Module):
                     x = self.act(x)
 
                 # Normalization
-                if self.norms[i] is not None:
-                    norm = self.norms[i]
-                    if self.norm_type == "batch_norm":
-                        # BatchNorm pools over every node of the mini-batch and
-                        # therefore has no segment count to make static
-                        x = norm(x, batch)
-                    else:
-                        x = norm(x, batch, batch_size)
+                norm = self.norms[i]
+                if isinstance(norm, BatchNorm):
+                    # BatchNorm pools over every node of the mini-batch and
+                    # therefore has no segment count to make static
+                    x = norm(x, batch)
+                elif norm is not None:
+                    x = norm(x, batch, batch_size)
 
                 # Activation (if not first)
                 if self.act is not None and not self.act_first:

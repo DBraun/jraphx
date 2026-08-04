@@ -48,7 +48,10 @@ def scatter_softmax(
         # Group 0: softmax([1.0, 2.0]) = [0.27, 0.73]
         # Group 1: softmax([3.0, 1.5]) = [0.82, 0.18]
     """
-    return _scatter_softmax(src, index, _resolve_dim_size(index, dim_size), dim, temperature)
+    out: jnp.ndarray = _scatter_softmax(
+        src, index, _resolve_dim_size(index, dim_size), dim, temperature
+    )
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
@@ -141,7 +144,10 @@ def scatter_log_softmax(
         # Group 0: log_softmax([1.0, 2.0])
         # Group 1: log_softmax([3.0, 1.5])
     """
-    return _scatter_log_softmax(src, index, _resolve_dim_size(index, dim_size), dim, temperature)
+    out: jnp.ndarray = _scatter_log_softmax(
+        src, index, _resolve_dim_size(index, dim_size), dim, temperature
+    )
+    return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))

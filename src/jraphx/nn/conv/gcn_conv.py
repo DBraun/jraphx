@@ -127,8 +127,9 @@ class GCNConv(MessagePassing):
         add_self_loops: bool = True,
         normalize: bool = True,
         bias: bool = True,
-        rngs: Rngs | None = None,
         static_num_nodes: int | None = None,
+        *,
+        rngs: Rngs,
     ):
         """Initialize the GCN layer.
 
@@ -168,12 +169,16 @@ class GCNConv(MessagePassing):
             rngs=rngs,
         )
 
+        self.bias: Param | None
         if bias:
             self.bias = Param(jnp.zeros((out_features,)))
         else:
             self.bias = nnx.data(None)
 
-        # Cache for normalized edge weights (for static graphs)
+        # Cache for normalized edge weights (for static graphs). The variables hold
+        # None until `precompute_norm` fills them.
+        self._cached_edge_index: Variable[jnp.ndarray | None] | None
+        self._cached_edge_weight: Variable[jnp.ndarray | None] | None
         if cached:
             self._cached_edge_index = Variable(None)
             self._cached_edge_weight = Variable(None)
@@ -277,7 +282,7 @@ class GCNConv(MessagePassing):
         Raises:
             ValueError: If the layer was not constructed with :obj:`cached=True`.
         """
-        if not self.cached:
+        if self._cached_edge_index is None or self._cached_edge_weight is None:
             raise ValueError(
                 f"'{self.__class__.__name__}.precompute_norm()' requires "
                 f"'cached=True'; a layer with 'cached=False' normalizes on every "
@@ -314,7 +319,15 @@ class GCNConv(MessagePassing):
             RuntimeError: If the cache is empty or was built for a different
                 number of nodes.
         """
-        if self._cached_edge_index.get_value() is None:
+        if self._cached_edge_index is None or self._cached_edge_weight is None:
+            raise RuntimeError(
+                f"'{self.__class__.__name__}' was constructed with 'cached=False', so "
+                f"it holds no normalization cache"
+            )
+
+        cached_edge_index = self._cached_edge_index.get_value()
+        cached_edge_weight = self._cached_edge_weight.get_value()
+        if cached_edge_index is None or cached_edge_weight is None:
             raise RuntimeError(
                 f"'{self.__class__.__name__}' was constructed with 'cached=True' but "
                 f"its normalization cache is empty. Call "
@@ -330,7 +343,7 @@ class GCNConv(MessagePassing):
                 f"for the new graph"
             )
 
-        return self._cached_edge_index.get_value(), self._cached_edge_weight.get_value()
+        return cached_edge_index, cached_edge_weight
 
     def __call__(
         self,
@@ -406,12 +419,12 @@ class GCNConv(MessagePassing):
 
         return out
 
-    def reset_cache(self):
+    def reset_cache(self) -> None:
         """Reset the cached edge weights.
 
         Call this when the graph structure changes.
         """
-        if self.cached:
+        if self._cached_edge_index is not None and self._cached_edge_weight is not None:
             self._cached_edge_index.set_value(None)
             self._cached_edge_weight.set_value(None)
         self._cached_num_nodes = None

@@ -380,6 +380,7 @@ class SAGPooling(TopKPooling):
         self.gnn_type = gnn
 
         # Create GNN layer for score computation
+        self.gnn: GCNConv | GATConv | SAGEConv
         if gnn == "gcn":
             self.gnn = GCNConv(num_features, 1, rngs=rngs)
         elif gnn == "gat":
@@ -406,7 +407,7 @@ class SAGPooling(TopKPooling):
         Returns:
             Raw node scores of shape ``[num_nodes]``.
         """
-        if self.gnn_type == "gat" and edge_attr is not None:
+        if isinstance(self.gnn, GATConv) and edge_attr is not None:
             scores = self.gnn(x, edge_index, edge_attr=edge_attr)
         else:
             scores = self.gnn(x, edge_index)
