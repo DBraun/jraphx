@@ -1,177 +1,163 @@
-Missing Tests in JraphX
-=======================
+Test Coverage
+=============
 
-This document tracks PyTorch Geometric tests that could not be ported to JraphX due to missing functionality, architectural differences, or deliberate design choices.
+This document records what the JraphX test suite covers, and which
+:obj:`torch_geometric` test areas are not covered because the underlying feature
+does not exist or is out of scope.
 
-Test Conversion Progress
-------------------------
+Current Coverage
+----------------
 
-The JraphX library aims to provide core GNN functionality with a JAX-first design. Not all PyTorch Geometric features are implemented, as some are outside the scope of a lightweight JAX library.
-
-Successfully Converted Tests
-----------------------------
-
-All tests have been successfully converted with comprehensive test coverage. Below is the complete list of converted test files and their status.
+The suite contains 1174 tests. Counts below are collected test cases, so
+parametrized tests contribute one entry per parameter set.
 
 Core Data Structures
-~~~~~~~~~~~~~~~~~~~~~
-- ``test_data_jraphx.py`` ✓ - Data class functionality (9 tests)
-- ``test_batch_jraphx.py`` ✓ - Batch class functionality (7 tests)
+~~~~~~~~~~~~~~~~~~~~
+
+- ``tests/data/test_data.py`` -- ``Data`` construction, attribute access, node and
+  edge counts, pytree round-trips (28)
+- ``tests/data/test_batch.py`` -- ``Batch`` collation, node-index offsetting,
+  unbatching, subclass configuration, pytree behaviour under ``jax.jit`` (46)
 
 Convolution Layers
 ~~~~~~~~~~~~~~~~~~
-- ``test_gcn_conv_jraphx.py`` ✓ - Graph Convolution Network (10 tests)
-- ``test_gat_conv_jraphx.py`` ✓ - Graph Attention Network (12 tests)
-- ``test_gatv2_conv_jraphx.py`` ✓ - Improved Graph Attention Network (referenced via GAT)
-- ``test_sage_conv_jraphx.py`` ✓ - GraphSAGE layer (16 tests)
-- ``test_gin_conv_jraphx.py`` ✓ - Graph Isomorphism Network (9 tests)
-- ``test_edge_conv_jraphx.py`` ✓ - EdgeConv and DynamicEdgeConv layers (12 tests)
-- ``test_transformer_conv_jraphx.py`` ✓ - Graph Transformer layer (13 tests)
+
+- ``tests/nn/conv/test_message_passing.py`` -- the ``propagate`` contract: both
+  flow directions, bipartite and homogeneous input, single evaluation of
+  ``message()``, and the opt-in ``message_and_aggregate`` hook (15)
+- ``tests/nn/conv/test_gcn_conv.py`` -- symmetric normalization, weighted degree,
+  ``improved``, self-loop handling, the explicit ``precompute_norm`` cache (28)
+- ``tests/nn/conv/test_gat_conv.py`` -- per-head attention normalization, edge
+  features, multi-head concat and averaging (15)
+- ``tests/nn/conv/test_gatv2_conv.py`` -- GATv2 attention, including the per-head
+  softmax property (10)
+- ``tests/nn/conv/test_sage_conv.py`` -- aggregations, root weight, bipartite
+  input with and without an explicit ``size`` (18)
+- ``tests/nn/conv/test_gin_conv.py`` -- ``eps`` and ``train_eps``, bipartite input (10)
+- ``tests/nn/conv/test_edge_conv.py`` -- ``EdgeConv`` and ``DynamicEdgeConv``,
+  including single evaluation of a stateful inner network (18)
+- ``tests/nn/conv/test_transformer_conv.py`` -- scaled dot-product attention,
+  edge features on both keys and values, ``beta`` and root weight (14)
 
 Utility Functions
 ~~~~~~~~~~~~~~~~~
-- ``test_scatter_jraphx.py`` ✓ - Scatter operations (add, mean, max, min, std, logsumexp) (9 tests)
-- ``test_degree_jraphx.py`` ✓ - Degree computation functions (3 tests)
-- ``test_coalesce_jraphx.py`` ✓ - Edge coalescing functionality (5 tests)
-- ``test_loop_jraphx.py`` ✓ - Self-loop addition/removal (6 tests)
+
+- ``tests/utils/test_scatter.py`` -- ``scatter_add``/``mean``/``max``/``min``/
+  ``std``/``logsumexp``, dtype preservation, empty segments (21)
+- ``tests/utils/test_scatter_softmax.py`` -- ``scatter_softmax``,
+  ``scatter_log_softmax``, ``masked_scatter_softmax``, fully masked groups (13)
+- ``tests/utils/test_coalesce.py`` -- reduction modes, sortedness, large node
+  counts (13)
+- ``tests/utils/test_loop.py`` -- self-loop addition and removal, ``fill_value`` (17)
+- ``tests/utils/test_degree.py`` -- ``degree``, ``in_degree``, ``out_degree`` (7)
+- ``tests/utils/test_convert.py`` -- ``to_undirected``, ``to_dense_adj``,
+  ``to_edge_index`` (13)
 
 Models
 ~~~~~~
-- ``test_basic_gnn_jraphx.py`` ✓ - Pre-built GNN models (GCN, GAT, SAGE, GIN) (769 tests)
-- ``test_jumping_knowledge_jraphx.py`` ✓ - JumpingKnowledge aggregation (4 tests)
-- ``test_mlp_jraphx.py`` ✓ - Multi-layer perceptron (12 tests)
+
+- ``tests/nn/models/test_basic_gnn.py`` -- the prebuilt ``GCN``, ``GAT``,
+  ``GraphSAGE`` and ``GIN`` stacks across layer counts, normalizations, jumping
+  knowledge modes and dropout (772)
+- ``tests/nn/models/test_mlp.py`` -- feature lists, normalization, ``plain_last`` (23)
+- ``tests/nn/models/test_jumping_knowledge.py`` -- ``cat``, ``max`` and ``lstm``
+  modes (9)
 
 Pooling Operations
 ~~~~~~~~~~~~~~~~~~
-- ``test_glob_jraphx.py`` ✓ - Global pooling operations (add, mean, max) (4 tests)
+
+- ``tests/nn/pool/test_glob.py`` -- global add/mean/max/min/sort/softmax pooling,
+  empty graphs, node features of arbitrary rank (17)
+- ``tests/nn/pool/test_topk_pool.py`` -- ``TopKPooling`` and ``SAGPooling``:
+  ``ratio`` typing, ``min_score``, the score gate and edge relabeling (26)
 
 Normalization Layers
-~~~~~~~~~~~~~~~~~~~~~
-- ``test_batch_norm_jraphx.py`` ✓ - Batch normalization (5 tests)
-- ``test_layer_norm_jraphx.py`` ✓ - Layer normalization (9 tests)
-- ``test_graph_norm_jraphx.py`` ✓ - Graph normalization (6 tests)
+~~~~~~~~~~~~~~~~~~~~
 
-**Total: 920+ test cases covering all implemented JraphX functionality**
+- ``tests/nn/norm/test_layer_norm.py`` -- node and graph modes, affine
+  parameters (19)
+- ``tests/nn/norm/test_graph_norm.py`` -- per-feature per-graph statistics and the
+  learnable mean shift (10)
+- ``tests/nn/norm/test_batch_norm.py`` -- running statistics, training and
+  evaluation modes (9)
 
-Tests Not Converted - Missing Core Features
---------------------------------------------
+Packaging
+~~~~~~~~~
 
-High Priority Missing Features
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- ``tests/test_version.py`` -- keeps ``__version__`` and the newest changelog
+  heading in lockstep (3)
 
-These tests cannot be converted because the underlying JraphX features don't exist yet:
+Not Covered - Feature Not Implemented
+-------------------------------------
+
+These :obj:`torch_geometric` test areas have no JraphX counterpart because the
+feature itself is absent. See :doc:`missing_features` for the full list.
 
 Convolution Layers
-^^^^^^^^^^^^^^^^^^
-- ``test_appnp.py`` - APPNP layer not implemented
-- ``test_cheb_conv.py`` - Chebyshev convolution not implemented
-- ``test_arma_conv.py`` - ARMA filters not implemented
-- ``test_graph_conv.py`` - Basic graph convolution not implemented
-- ``test_nn_conv.py`` - NN-based convolution not implemented
-- ``test_spline_conv.py`` - Spline-based convolution not implemented
-- ``test_pna_conv.py`` - Principal Neighbourhood Aggregation not implemented
-- ``test_film_conv.py`` - FiLM layers not implemented
+~~~~~~~~~~~~~~~~~~
 
-Message Passing Framework
-^^^^^^^^^^^^^^^^^^^^^^^^^
-- ``test_message_passing.py`` - Only partial message passing framework exists
-- Advanced aggregation functions beyond basic scatter operations
-- Custom message/update function hooks
+- ``test_appnp.py``, ``test_cheb_conv.py``, ``test_arma_conv.py``,
+  ``test_graph_conv.py``, ``test_nn_conv.py``, ``test_spline_conv.py``,
+  ``test_pna_conv.py``, ``test_film_conv.py``
 
 Heterogeneous Graphs
-^^^^^^^^^^^^^^^^^^^^
-- ``test_hetero_conv.py`` - No heterogeneous graph support
-- ``test_hgt_conv.py`` - Heterogeneous Graph Transformer not implemented
-- ``test_han_conv.py`` - Heterogeneous Attention Network not implemented
+~~~~~~~~~~~~~~~~~~~~
 
-Pooling Operations
-^^^^^^^^^^^^^^^^^^
-- ``test_topk_pool.py`` - TopK pooling not implemented
-- ``test_sag_pool.py`` - SAG pooling not implemented
-- ``test_asap.py`` - ASAP pooling not implemented
-- ``test_diff_pool.py`` - DiffPool not implemented
-- ``test_edge_pool.py`` - Edge pooling not implemented
+- ``test_hetero_conv.py``, ``test_hgt_conv.py``, ``test_han_conv.py`` -- there is
+  no heterogeneous graph support
+
+Aggregation Modules
+~~~~~~~~~~~~~~~~~~~
+
+- Tests for the ``Aggregation`` class hierarchy. JraphX exposes aggregation as
+  scatter functions and pooling operations rather than as composable modules, so
+  ``MultiAggregation``, ``DegreeScalerAggregation``, ``Set2Set`` and friends have
+  no counterpart.
+
+Hierarchical Pooling
+~~~~~~~~~~~~~~~~~~~~
+
+- ``test_asap.py``, ``test_diff_pool.py``, ``test_edge_pool.py``.
+  ``TopKPooling`` and ``SAGPooling`` *are* implemented and tested above.
 
 Advanced Models
-^^^^^^^^^^^^^^^
-- ``test_autoencoder.py`` - Autoencoder models not implemented
-- ``test_deep_graph_infomax.py`` - Deep Graph Infomax not implemented
-- ``test_node2vec.py`` - Node2Vec not implemented
-- ``test_metapath2vec.py`` - Metapath2Vec not implemented
+~~~~~~~~~~~~~~~
 
-Tests Not Converted - PyTorch-Specific Features
-------------------------------------------------
+- ``test_autoencoder.py``, ``test_deep_graph_infomax.py``, ``test_node2vec.py``,
+  ``test_metapath2vec.py``
 
-These tests rely on PyTorch-specific functionality that doesn't have JAX equivalents:
-
-JIT Compilation & TorchScript
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Tests involving ``torch.jit.script()`` compilation
-- TorchScript-specific functionality tests
-- Dynamic graph compilation features
-
-CUDA-Specific Tests
-~~~~~~~~~~~~~~~~~~~
-- ``test_fused_gat_conv.py`` - CUDA kernel optimizations
-- CuGraph integration tests (``tests/nn/conv/cugraph/``)
-- GPU memory management tests
-
-PyTorch Lightning Integration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- ``test_datamodule.py`` - PyTorch Lightning specific features
-- Lightning-based training loop tests
-
-Sparse Tensor Operations
-~~~~~~~~~~~~~~~~~~~~~~~~
-- ``test_sparse.py`` - PyTorch sparse tensor operations
-- torch_sparse library integration tests
-- SparseTensor class functionality
-
-Tests Not Converted - Out of Scope
------------------------------------
-
-These test areas are deliberately excluded from JraphX scope:
-
-Explainability
-~~~~~~~~~~~~~~
-- ``tests/explain/`` - Entire explainability module (47 test files)
-- GNN explainability is a specialized domain outside core GNN functionality
-
-Visualization
-~~~~~~~~~~~~~
-- ``tests/visualization/`` - Graph visualization functionality
-- Visualization is typically handled by specialized libraries
-
-Natural Language Processing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- ``tests/nn/nlp/`` - NLP-specific functionality
-- Sentence transformers and language model integration
-
-3D Point Clouds & Molecular Data
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Point cloud convolutions (``test_point_conv.py``, ``test_ppf_conv.py``)
-- Molecular property prediction models
-- 3D geometry-specific operations
-
-Advanced Optimization
-~~~~~~~~~~~~~~~~~~~~~
-- ``test_correct_and_smooth.py`` - Advanced optimization techniques
-- Label propagation algorithms
-- Advanced training strategies
-
-Database & Storage Integration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- ``tests/data/test_database.py`` - Database integration
-- ``tests/data/test_remote_backend_utils.py`` - Remote storage
-- Complex data pipeline functionality
-
-Conversion Notes and Patterns
+Not Covered - PyTorch-Specific
 ------------------------------
 
-When converting tests, the following patterns were applied:
+These rely on PyTorch functionality with no JAX equivalent:
 
-Import Conversions
-~~~~~~~~~~~~~~~~~~
+- ``torch.jit.script()`` compilation and TorchScript behaviour. The JAX analogue
+  is :obj:`jax.jit`, which the suite exercises directly where a layer supports it.
+- ``test_fused_gat_conv.py``, the ``tests/nn/conv/cugraph/`` tree, and GPU memory
+  management -- CUDA kernel specialisations.
+- ``test_datamodule.py`` -- PyTorch Lightning integration.
+- ``test_sparse.py`` and ``torch_sparse`` integration -- JraphX represents graphs
+  with dense ``edge_index`` arrays.
+
+Not Covered - Out of Scope
+--------------------------
+
+- ``tests/explain/`` -- GNN explainability is a specialized domain outside core
+  GNN functionality.
+- ``tests/visualization/`` -- handled by specialized libraries.
+- ``tests/nn/nlp/`` -- sentence transformers and language model integration.
+- Point cloud convolutions (``test_point_conv.py``, ``test_ppf_conv.py``) and
+  molecular property prediction models.
+- ``test_correct_and_smooth.py`` and label propagation.
+- ``tests/data/test_database.py`` and ``tests/data/test_remote_backend_utils.py``
+  -- database and remote storage backends.
+
+Conventions for New Tests
+-------------------------
+
+Imports
+~~~~~~~
+
 .. code-block:: python
 
    # PyTorch Geometric
@@ -184,8 +170,9 @@ Import Conversions
    from jraphx.nn.conv import GCNConv
    from jraphx.data import Data, Batch
 
-Tensor Operations
-~~~~~~~~~~~~~~~~~
+Array Operations
+~~~~~~~~~~~~~~~~
+
 .. code-block:: python
 
    # PyTorch
@@ -196,8 +183,9 @@ Tensor Operations
    x = random.normal(random.key(0), (4, 16))
    assert jnp.allclose(x, x)
 
-Model Initialization
-~~~~~~~~~~~~~~~~~~~~
+Module Construction
+~~~~~~~~~~~~~~~~~~~
+
 .. code-block:: python
 
    # PyTorch Geometric
@@ -206,33 +194,14 @@ Model Initialization
    # JraphX
    conv = GCNConv(16, 32, rngs=nnx.Rngs(0))
 
-Testing Strategy
-~~~~~~~~~~~~~~~~
-- Maintain original test logic and assertions
-- Comment out unportable sections with clear TODO notes
-- Document conversion limitations in test docstrings
+Guidelines
+~~~~~~~~~~
 
-Future Work
------------
+- Pin numerics, not just shapes. A test for a numerical fix that asserts only
+  ``out.shape`` passes against the bug it was written for.
+- Prefer small deterministic literal inputs over PRNG draws when asserting exact
+  values, so the constants stay stable across JAX versions and platforms.
+- Do not wrap assertions in ``try``/``except``; let failures propagate.
+- Run the suite with ``-W error::DeprecationWarning``; it is currently clean.
 
-This document should be updated as new features are added to JraphX. Priority should be given to:
-
-1. **Core Convolution Layers** - APPNP, Chebyshev, Graph convolutions
-2. **Advanced Pooling** - TopK, SAG, hierarchical pooling
-3. **Heterogeneous Support** - Multi-relation and multi-node-type graphs
-4. **Advanced Aggregation** - Beyond basic scatter operations
-
-Each new feature implementation should be accompanied by converted tests from the corresponding PyG test files.
-
-Contributing Test Conversions
-------------------------------
-
-When contributing new test conversions:
-
-1. Follow the established conversion patterns above
-2. Document any limitations or missing functionality
-3. Update this document with the conversion status
-4. Ensure tests pass with ``python -m pytest``
-5. Add TODO comments for unportable test sections
-
-For questions about test conversion priorities or implementation approaches, refer to the main JraphX documentation and the ``docs/source/missing_features.rst`` file.
+Keep this document in step with the suite when adding tests or features.
