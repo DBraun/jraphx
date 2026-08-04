@@ -120,8 +120,33 @@ jobs:
         run: |
           pytest tests/ -v
 
+  test_minimum_versions:
+    name: Run tests (minimum supported dependencies)
+    needs: lint
+    runs-on: ubuntu-latest
+    # Pins the exact lower bounds declared in pyproject.toml. Without this, the
+    # floor drifts silently: flax only declares a lower bound on jax, so an old
+    # flax installs happily against a new jax and then fails at import.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies at their declared minimums
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" "jax==0.10.0" "jaxlib==0.10.0" "flax==0.12.8" "numpy==2.0.0"
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v
+
   upload_pypi:
-    needs: [lint, build_wheel, build_sdist, test]
+    needs: [lint, build_wheel, build_sdist, test, test_minimum_versions]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:

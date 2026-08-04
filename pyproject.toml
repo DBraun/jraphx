@@ -37,10 +37,16 @@ classifiers = [
 ]
 
 dependencies = [
-    "jax>=0.7.0",
-    "jaxlib>=0.7.0",
-    "flax>=0.12.0",
-    "numpy>=1.21.0",
+    # flax 0.12.1 is the first release with nnx.Variable.get_value()/set_value(),
+    # which this library uses for variables that may hold None. The floor is set at
+    # 0.12.8 rather than 0.12.1 because that is the version CI exercises; the
+    # `test-minimum-versions` job pins exactly these lower bounds so the floor stays
+    # honest. flax 0.12.8 itself requires jax>=0.10.0.
+    "jax>=0.10.0",
+    "jaxlib>=0.10.0",
+    "flax>=0.12.8",
+    # jax 0.10 requires numpy>=2.0, so anything lower was never installable.
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]

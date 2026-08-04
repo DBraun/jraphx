@@ -9,6 +9,19 @@ with :obj:`torch_geometric` semantics. Numerical outputs, module state layouts a
 few public signatures change as a result, so upgrading from 0.0.4 requires the
 migrations listed below.
 
+**Breaking Changes -- Dependencies**
+
+* Minimum dependency versions are raised to ``flax>=0.12.8``, ``jax>=0.10.0``,
+  ``jaxlib>=0.10.0`` and ``numpy>=2.0``. The previous floors were not installable as
+  declared: ``flax`` only publishes a lower bound on ``jax``, so ``flax==0.12.0`` would
+  resolve against a current ``jax`` and then fail at import. ``flax>=0.12.1`` is the
+  first release providing ``nnx.Variable.get_value()``/``set_value()``, which this
+  library needs for variables that may hold :obj:`None`; the floor is set at the version
+  CI actually exercises. ``jax`` 0.10 in turn requires ``numpy>=2.0``, so the old
+  ``numpy>=1.21`` was never satisfiable alongside it.
+* A ``test-minimum-versions`` CI job installs these exact lower bounds and runs the full
+  suite against them, so the declared floor cannot drift from the tested one.
+
 **Breaking Changes -- Public API**
 
 * ``GCNConv(cached=True)`` no longer fills its cache on the first forward pass. Call
