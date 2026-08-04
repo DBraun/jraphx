@@ -330,7 +330,7 @@ To run these examples:
 
    .. code-block:: bash
 
-      python basic_examples.py
+      python my_example.py
 
 Each example is self-contained and demonstrates different aspects of JraphX:
 
@@ -357,7 +357,8 @@ For more comprehensive and advanced examples, explore the ``examples/`` director
 
 **Research Examples:**
 - ``graph_saint_flickr.py`` - Large-scale graph sampling and training
-- ``tempo_diffusion.py`` - Temporal graph diffusion models
+- ``graph_saint_flickr_benchmark.py`` - Throughput benchmark for the sampling pipeline
+- ``scatter_operations_demo.py`` - Scatter primitives behind the aggregation layers
 
 These examples demonstrate production-ready code patterns, real dataset handling, and advanced JraphX features. They're perfect for understanding how to apply JraphX to your own research or projects.
 

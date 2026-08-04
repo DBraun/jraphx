@@ -9,9 +9,70 @@ from functools import partial
 import jax
 from jax import numpy as jnp
 
+#: Accepted spellings of the supported reductions, mapped to canonical names.
+_REDUCE_ALIASES = {"sum": "add", "add": "add", "mean": "mean", "max": "max", "min": "min"}
 
-# Use optimized implementations by default
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
+
+def _canonical_reduce(reduce: str) -> str:
+    """Maps a reduction spelling onto the canonical JraphX name.
+
+    Args:
+        reduce: Name of the reduction. ``"sum"`` is accepted as an alias of
+            ``"add"`` for :obj:`torch_geometric` compatibility.
+
+    Returns:
+        str: The canonical reduction name.
+
+    Raises:
+        ValueError: If ``reduce`` names an unsupported reduction.
+    """
+    if reduce not in _REDUCE_ALIASES:
+        raise ValueError(
+            f"Unknown reduce operation: {reduce!r} (expected one of {sorted(_REDUCE_ALIASES)})"
+        )
+    return _REDUCE_ALIASES[reduce]
+
+
+def _resolve_dim_size(index: jnp.ndarray, dim_size: int | None) -> int:
+    """Returns the number of output segments as a static Python integer.
+
+    Args:
+        index: The index tensor the scatter is grouped by.
+        dim_size: The requested output size, or :obj:`None` to infer it from
+            ``index``.
+
+    Returns:
+        int: The output size along the scattered dimension.
+
+    Raises:
+        jax.errors.ConcretizationTypeError: If ``dim_size`` is :obj:`None` and
+            ``index`` is a tracer, because the inferred size is then
+            data-dependent and cannot be a static shape.
+    """
+    if dim_size is not None:
+        return dim_size
+    if index.size == 0:
+        return 0
+    return int(index.max()) + 1
+
+
+def _empty_segment_mask(index: jnp.ndarray, dim_size: int, ndim: int) -> jnp.ndarray:
+    """Builds a mask selecting the segments that received at least one value.
+
+    Args:
+        index: The index tensor the scatter is grouped by.
+        dim_size: The number of output segments.
+        ndim: Rank of the source tensor, used to make the mask broadcastable.
+
+    Returns:
+        jax.Array: Boolean mask of shape ``(dim_size, 1, ..., 1)``.
+    """
+    counts = jax.ops.segment_sum(
+        jnp.ones_like(index, dtype=jnp.int32), index, num_segments=dim_size
+    )
+    return (counts > 0).reshape((-1,) + (1,) * (ndim - 1))
+
+
 def scatter_add(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -24,19 +85,40 @@ def scatter_add(
     Uses JAX's optimized segment_sum for better performance.
 
     .. note::
-        For JIT compatibility, :obj:`dim_size` must be provided as a static
-        integer. If :obj:`dim_size` is :obj:`None`, the function will
-        compute it dynamically, which may fail under JIT compilation.
+        :obj:`dim_size` determines the output shape and is therefore a static
+        argument. When it is :obj:`None` it is inferred from ``index``, which
+        requires ``index`` to be concrete and hence is not available under
+        :obj:`jax.jit`.
 
     Args:
         src (jax.Array): The source tensor.
         index (jax.Array): The index tensor.
         dim_size (int, optional): The size of the output tensor at dimension
             ``dim``. If set to :obj:`None`, will create a minimal-sized output
-            tensor according to ``index.max() + 1``. For JIT compatibility,
-            this should be provided as a static integer. (default: :obj:`None`)
+            tensor according to ``index.max() + 1``. (default: :obj:`None`)
         dim (int, optional): The dimension along which to index.
             (default: :obj:`-2`)
+
+    Returns:
+        jax.Array: Tensor with scattered values summed at each index.
+    """
+    return _scatter_add(src, index, _resolve_dim_size(index, dim_size), dim)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim"))
+def _scatter_add(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_add` with a static ``dim_size``.
+
+    Args:
+        src: The source tensor.
+        index: The index tensor.
+        dim_size: The number of output segments.
+        dim: The dimension along which to index.
 
     Returns:
         jax.Array: Tensor with scattered values summed at each index.
@@ -51,11 +133,6 @@ def scatter_add(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    if dim_size is None:
-        # For JIT compatibility, we compute dim_size outside of jitted context
-        # This will work for eager execution but may fail in JIT
-        dim_size = index.max() + 1 if index.size > 0 else 0
-
     return jax.ops.segment_sum(
         src,
         index,
@@ -63,7 +140,6 @@ def scatter_add(
     )
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_mean(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -72,10 +148,34 @@ def scatter_mean(
 ) -> jnp.ndarray:
     """Scatter mean operation - averages values from src at indices specified by index.
 
+    Empty segments are filled with zero.
+
     Args:
         src: Source tensor to scatter
         index: Indices where to scatter
-        dim_size: Size of the output dimension
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
+        dim: Dimension along which to scatter
+
+    Returns:
+        Tensor with scattered values
+    """
+    return _scatter_mean(src, index, _resolve_dim_size(index, dim_size), dim)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim"))
+def _scatter_mean(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_mean` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Number of output segments
         dim: Dimension along which to scatter
 
     Returns:
@@ -85,9 +185,6 @@ def scatter_mean(
         dim = 0
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
-
-    if dim_size is None:
-        dim_size = index.max() + 1
 
     # Compute sum and count efficiently
     sums = jax.ops.segment_sum(src, index, num_segments=dim_size)
@@ -99,20 +196,50 @@ def scatter_mean(
     return sums / counts
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_max(
     src: jnp.ndarray,
     index: jnp.ndarray,
     dim_size: int | None = None,
     dim: int = -2,
+    fill_value: float | None = None,
 ) -> jnp.ndarray:
     """Scatter max operation - takes maximum of values from src at indices specified by index.
+
+    Segments that receive no value are filled with ``fill_value``. Emptiness is
+    determined from ``index`` alone, so genuine infinities and NaNs present in
+    ``src`` are propagated untouched and the output keeps ``src``'s dtype.
 
     Args:
         src: Source tensor to scatter
         index: Indices where to scatter
-        dim_size: Size of the output dimension
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
         dim: Dimension along which to scatter
+        fill_value: Value assigned to empty segments, cast to ``src.dtype``.
+            :obj:`None` means zero.
+
+    Returns:
+        Tensor with scattered values
+    """
+    return _scatter_max(src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
+def _scatter_max(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+    fill_value: float | None,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_max` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Number of output segments
+        dim: Dimension along which to scatter
+        fill_value: Value assigned to empty segments, :obj:`None` meaning zero
 
     Returns:
         Tensor with scattered values
@@ -121,9 +248,6 @@ def scatter_max(
         dim = 0
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
-
-    if dim_size is None:
-        dim_size = index.max() + 1
 
     result = jax.ops.segment_max(
         src,
@@ -131,24 +255,56 @@ def scatter_max(
         num_segments=dim_size,
     )
 
-    # Replace -inf with 0 for empty segments
-    return jnp.where(jnp.isfinite(result), result, 0.0)
+    fill = (
+        jnp.zeros((), src.dtype) if fill_value is None else jnp.asarray(fill_value, dtype=src.dtype)
+    )
+    return jnp.where(_empty_segment_mask(index, dim_size, src.ndim), result, fill)
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_min(
     src: jnp.ndarray,
     index: jnp.ndarray,
     dim_size: int | None = None,
     dim: int = -2,
+    fill_value: float | None = None,
 ) -> jnp.ndarray:
     """Scatter min operation - takes minimum of values from src at indices specified by index.
+
+    Segments that receive no value are filled with ``fill_value``. Emptiness is
+    determined from ``index`` alone, so genuine infinities and NaNs present in
+    ``src`` are propagated untouched and the output keeps ``src``'s dtype.
 
     Args:
         src: Source tensor to scatter
         index: Indices where to scatter
-        dim_size: Size of the output dimension
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
         dim: Dimension along which to scatter
+        fill_value: Value assigned to empty segments, cast to ``src.dtype``.
+            :obj:`None` means zero.
+
+    Returns:
+        Tensor with scattered values
+    """
+    return _scatter_min(src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
+def _scatter_min(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+    fill_value: float | None,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_min` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Number of output segments
+        dim: Dimension along which to scatter
+        fill_value: Value assigned to empty segments, :obj:`None` meaning zero
 
     Returns:
         Tensor with scattered values
@@ -158,20 +314,18 @@ def scatter_min(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    if dim_size is None:
-        dim_size = index.max() + 1
-
     result = jax.ops.segment_min(
         src,
         index,
         num_segments=dim_size,
     )
 
-    # Replace inf with 0 for empty segments
-    return jnp.where(jnp.isfinite(result), result, 0.0)
+    fill = (
+        jnp.zeros((), src.dtype) if fill_value is None else jnp.asarray(fill_value, dtype=src.dtype)
+    )
+    return jnp.where(_empty_segment_mask(index, dim_size, src.ndim), result, fill)
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim", "reduce"))
 def scatter(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -188,13 +342,16 @@ def scatter(
     Args:
         src: Source tensor to scatter [\\*, N, \\*]
         index: Indices where to scatter [N] or same shape as src
-        dim_size: Size of the output dimension (inferred if None)
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
         dim: Dimension along which to scatter (default: -2, which maps to 0)
-        reduce: Reduction operation - "add", "mean", "max", "min"
+        reduce: Reduction operation - "add" (alias "sum"), "mean", "max", "min"
 
     Returns:
         Output tensor with scattered values [\\*, dim_size, \\*]
     """
+    reduce = _canonical_reduce(reduce)
+
     if reduce == "add":
         return scatter_add(src, index, dim_size, dim)
     elif reduce == "mean":
@@ -204,7 +361,7 @@ def scatter(
     elif reduce == "min":
         return scatter_min(src, index, dim_size, dim)
     else:
-        raise ValueError(f"Unknown reduce operation: {reduce}")
+        raise RuntimeError(f"Canonical reduce operation {reduce!r} has no implementation")
 
 
 def segment_sum(
@@ -222,8 +379,7 @@ def segment_sum(
     Returns:
         Tensor with segmented sums
     """
-    if num_segments is None:
-        num_segments = segment_ids.max() + 1
+    num_segments = _resolve_dim_size(segment_ids, num_segments)
 
     return jax.ops.segment_sum(data, segment_ids, num_segments)
 
@@ -243,8 +399,7 @@ def segment_mean(
     Returns:
         Tensor with segmented means
     """
-    if num_segments is None:
-        num_segments = segment_ids.max() + 1
+    num_segments = _resolve_dim_size(segment_ids, num_segments)
 
     # Compute sum and count
     sums = jax.ops.segment_sum(data, segment_ids, num_segments)
@@ -271,28 +426,55 @@ def segment_max(
     Returns:
         Tensor with segmented maximums
     """
-    if num_segments is None:
-        num_segments = segment_ids.max() + 1
+    num_segments = _resolve_dim_size(segment_ids, num_segments)
 
     return jax.ops.segment_max(data, segment_ids, num_segments)
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_std(
     src: jnp.ndarray,
     index: jnp.ndarray,
     dim_size: int | None = None,
     dim: int = -2,
+    unbiased: bool = True,
 ) -> jnp.ndarray:
     """Scatter standard deviation - computes std of values at indices.
 
-    Uses the formula: std = sqrt(E[X^2] - E[X]^2)
+    The deviations are accumulated around the per-segment mean, which avoids the
+    catastrophic cancellation of the ``E[X^2] - E[X]^2`` form. Segments holding
+    fewer than two values (and empty segments) get a standard deviation of zero.
 
     Args:
         src: Source tensor to scatter
         index: Indices where to scatter
-        dim_size: Size of the output dimension
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
         dim: Dimension along which to scatter
+        unbiased: Whether to apply Bessel's correction, *i.e.* divide by
+            ``count - 1`` instead of ``count``
+
+    Returns:
+        Tensor with scattered standard deviations
+    """
+    return _scatter_std(src, index, _resolve_dim_size(index, dim_size), dim, unbiased=unbiased)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim", "unbiased"))
+def _scatter_std(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+    unbiased: bool,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_std` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Number of output segments
+        dim: Dimension along which to scatter
+        unbiased: Whether to apply Bessel's correction
 
     Returns:
         Tensor with scattered standard deviations
@@ -302,27 +484,20 @@ def scatter_std(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    if dim_size is None:
-        dim_size = index.max() + 1
+    mean = _scatter_mean(src, index, dim_size, dim)
 
-    # Compute mean and mean of squares
-    mean = scatter_mean(src, index, dim_size, dim)
+    # Accumulate squared deviations around the segment mean.
+    centered = src - mean[index]
+    sum_sq = _scatter_add(centered * centered, index, dim_size, dim)
 
-    # Compute E[X^2]
-    src_squared = src * src
-    mean_squared = scatter_mean(src_squared, index, dim_size, dim)
+    counts = jax.ops.segment_sum(
+        jnp.ones_like(index, dtype=mean.dtype), index, num_segments=dim_size
+    ).reshape((-1,) + (1,) * (src.ndim - 1))
 
-    # Compute variance: E[X^2] - E[X]^2
-    variance = mean_squared - mean * mean
-
-    # Handle numerical issues (variance should never be negative)
-    variance = jnp.maximum(variance, 0.0)
-
-    # Return standard deviation
-    return jnp.sqrt(variance)
+    denominator = jnp.maximum(counts - 1.0 if unbiased else counts, 1.0)
+    return jnp.sqrt(sum_sq / denominator)
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_logsumexp(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -332,11 +507,35 @@ def scatter_logsumexp(
     """Scatter logsumexp - numerically stable log-sum-exp aggregation.
 
     Computes log(sum(exp(x))) for values at each index, with numerical stability.
+    Segments that receive no value evaluate to ``-inf``, the identity of the
+    operation.
 
     Args:
         src: Source tensor to scatter
         index: Indices where to scatter
-        dim_size: Size of the output dimension
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None` (which requires a concrete ``index``)
+        dim: Dimension along which to scatter
+
+    Returns:
+        Tensor with log-sum-exp aggregated values
+    """
+    return _scatter_logsumexp(src, index, _resolve_dim_size(index, dim_size), dim)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim"))
+def _scatter_logsumexp(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_logsumexp` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Number of output segments
         dim: Dimension along which to scatter
 
     Returns:
@@ -347,29 +546,17 @@ def scatter_logsumexp(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    if dim_size is None:
-        dim_size = index.max() + 1
+    # For numerical stability, subtract the max value per segment.
+    max_vals = _scatter_max(src, index, dim_size, dim, fill_value=-jnp.inf)
 
-    # For numerical stability, subtract the max value per segment
-    max_vals = scatter_max(src, index, dim_size, dim)
+    # Empty segments, and segments whose values are all -inf, carry a -inf max;
+    # shifting those by zero keeps the exponentials finite and yields -inf.
+    shift = jnp.where(jnp.isneginf(max_vals), jnp.zeros((), max_vals.dtype), max_vals)
 
-    # Replace -inf with a large negative number for empty segments
-    max_vals = jnp.where(jnp.isfinite(max_vals), max_vals, -1e10)
+    exp_vals = jnp.exp(src - shift[index])
+    sum_exp = _scatter_add(exp_vals, index, dim_size, dim)
 
-    # Subtract max from each element (indexed by segment)
-    src_shifted = src - max_vals[index]
-
-    # Compute exp and sum
-    exp_vals = jnp.exp(src_shifted)
-    sum_exp = scatter_add(exp_vals, index, dim_size, dim)
-
-    # Compute log and add back the max
-    result = jnp.log(sum_exp + 1e-10) + max_vals
-
-    # Handle empty segments (where max_vals was -inf)
-    result = jnp.where(jnp.isfinite(max_vals), result, -jnp.inf)
-
-    return result
+    return jnp.log(sum_exp) + shift
 
 
 # Keep fallback for compatibility
@@ -382,14 +569,25 @@ def scatter_fallback(
 ) -> jnp.ndarray:
     """Fallback scatter implementation using loops (slower but supports all dimensions).
 
-    This is the original implementation kept for compatibility and testing.
+    This implementation is kept for compatibility and testing.
     Use the main scatter() function for better performance.
+
+    Args:
+        src: Source tensor to scatter
+        index: Indices where to scatter
+        dim_size: Size of the output dimension, inferred from ``index`` if
+            :obj:`None`
+        dim: Dimension along which to scatter
+        reduce: Reduction operation - "add" (alias "sum"), "mean", "max", "min"
+
+    Returns:
+        Output tensor with scattered values
     """
+    reduce = _canonical_reduce(reduce)
+
     # Handle the common case for GNNs: dim=0
     if dim == 0 or (dim == -2 and src.ndim == 2):
-        # Simple case: scatter along first dimension
-        if dim_size is None:
-            dim_size = index.max() + 1
+        dim_size = _resolve_dim_size(index, dim_size)
 
         # Initialize output
         if src.ndim == 1:
@@ -412,18 +610,24 @@ def scatter_fallback(
             if src.ndim > 1:
                 count = count.reshape(-1, *([1] * (src.ndim - 1)))
             out = out / count
-        elif reduce == "max":
-            out = jnp.full(shape, -jnp.inf, dtype=src.dtype)
+        elif reduce in ("max", "min"):
+            is_max = reduce == "max"
+            if jnp.issubdtype(src.dtype, jnp.integer):
+                extreme = jnp.iinfo(src.dtype).min if is_max else jnp.iinfo(src.dtype).max
+            else:
+                extreme = -jnp.inf if is_max else jnp.inf
+            out = jnp.full(shape, extreme, dtype=src.dtype)
+            seen = jnp.zeros((dim_size,), dtype=jnp.bool_)
             for i in range(src.shape[0]):
-                out = out.at[index[i]].max(src[i])
-            out = jnp.where(out == -jnp.inf, 0, out)
-        elif reduce == "min":
-            out = jnp.full(shape, jnp.inf, dtype=src.dtype)
-            for i in range(src.shape[0]):
-                out = out.at[index[i]].min(src[i])
-            out = jnp.where(out == jnp.inf, 0, out)
+                if is_max:
+                    out = out.at[index[i]].max(src[i])
+                else:
+                    out = out.at[index[i]].min(src[i])
+                seen = seen.at[index[i]].set(True)
+            mask = seen.reshape((-1,) + (1,) * (src.ndim - 1))
+            out = jnp.where(mask, out, jnp.zeros((), src.dtype))
         else:
-            raise ValueError(f"Unknown reduce operation: {reduce}")
+            raise RuntimeError(f"Canonical reduce operation {reduce!r} has no implementation")
 
         return out
 

@@ -1,5 +1,7 @@
 """Graph Isomorphism Network (GIN) layer implementation."""
 
+from typing import Union
+
 import jax.numpy as jnp
 from flax.nnx import Module, Param, Rngs
 
@@ -63,31 +65,39 @@ class GINConv(MessagePassing):
 
     def __call__(
         self,
-        x: jnp.ndarray,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
         edge_index: jnp.ndarray,
         edge_attr: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Forward pass of the GIN layer.
 
         Args:
-            x: Node features [num_nodes, in_features]
+            x: Node features [num_nodes, in_features], or a ``(x_src, x_dst)``
+                tuple for bipartite graphs
             edge_index: Edge indices [2, num_edges]
             edge_attr: Optional edge features (not used in GIN)
 
         Returns:
-            Updated node features [num_nodes, out_features]
+            Updated node features [num_nodes, out_features], or
+            [num_dst_nodes, out_features] for bipartite input
         """
         # Get epsilon value
         if isinstance(self.eps, Param):
-            eps = self.eps.value[0]
+            eps = self.eps[0]
         else:
             eps = self.eps
+
+        # The root term uses the target side of a bipartite pair
+        if isinstance(x, tuple):
+            x_dst = x[1] if self.flow == "source_to_target" else x[0]
+        else:
+            x_dst = x
 
         # Aggregate neighbor features
         out = self.propagate(edge_index, x, edge_attr)
 
         # Add weighted self-features
-        out = (1 + eps) * x + out
+        out = (1 + eps) * x_dst + out
 
         # Apply MLP
         out = self.nn(out)

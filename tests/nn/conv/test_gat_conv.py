@@ -1,11 +1,14 @@
 """Test cases for JraphX GATConv layer converted from PyTorch Geometric tests."""
 
+import numpy as np
 import pytest
 from flax import nnx
+from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random
 
 from jraphx.nn.conv import GATConv
+from jraphx.utils import scatter_add, scatter_softmax
 
 
 @pytest.mark.parametrize("residual", [False, True])
@@ -247,6 +250,67 @@ def test_gat_conv_residual():
 
     # Results should be different
     assert not jnp.allclose(out_res, out_no_res, atol=1e-5)
+
+
+def test_gat_conv_softmax_is_per_head():
+    """Attention coefficients must sum to one per (target node, head), not jointly."""
+    heads = 4
+    x = random.normal(random.key(7), (5, 6))
+    # Nodes 1 and 3 each receive three incoming edges.
+    edge_index = jnp.array([[0, 2, 4, 0, 1, 2], [1, 1, 1, 3, 3, 3]])
+
+    conv = GATConv(6, 3, heads=heads, add_self_loops=False, rngs=nnx.Rngs(0))
+    _, (returned_edge_index, alpha) = conv(x, edge_index, return_attention_weights=True)
+
+    assert alpha.shape == (6, heads)
+    assert jnp.array_equal(returned_edge_index, edge_index)
+
+    target = np.asarray(edge_index[1])
+    for node in [1, 3]:
+        per_head_sum = np.asarray(alpha)[target == node].sum(axis=0)
+        # Each head is normalized independently ...
+        assert np.allclose(per_head_sum, np.ones(heads), atol=1e-5)
+        # ... so the joint sum over all heads is `heads`, not 1.
+        assert np.isclose(per_head_sum.sum(), heads, atol=1e-5)
+
+
+def test_gat_conv_attention_matches_reference():
+    """The layer reproduces the GAT operator with att_src on source, att_dst on target."""
+    heads, out_features = 3, 4
+    x = random.normal(random.key(11), (6, 5))
+    edge_index = jnp.array([[0, 1, 2, 3, 4, 5, 1], [1, 2, 3, 4, 5, 0, 0]])
+
+    conv = GATConv(5, out_features, heads=heads, add_self_loops=False, rngs=nnx.Rngs(3))
+    out, (_, alpha) = conv(x, edge_index, return_attention_weights=True)
+
+    num_nodes = x.shape[0]
+    row, col = edge_index[0], edge_index[1]
+    h = conv.lin(x).reshape(num_nodes, heads, out_features)
+    scores = jnp.sum(h[row] * conv.att_src[...], axis=-1) + jnp.sum(
+        h[col] * conv.att_dst[...], axis=-1
+    )
+    scores = jnn.leaky_relu(scores, negative_slope=conv.negative_slope)
+    expected_alpha = scatter_softmax(scores, col, dim_size=num_nodes)
+    messages = (h[row] * expected_alpha[..., None]).reshape(-1, heads * out_features)
+    expected_out = scatter_add(messages, col, dim_size=num_nodes) + conv.bias[...]
+
+    assert jnp.allclose(alpha, expected_alpha, atol=1e-6)
+    assert jnp.allclose(out, expected_out, atol=1e-5)
+
+
+def test_gat_conv_size_with_dense_input():
+    """A `size` smaller than the node count restricts the number of target nodes."""
+    x = random.normal(random.key(5), (4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    conv = GATConv(8, 16, heads=2, add_self_loops=False, rngs=nnx.Rngs(0))
+
+    out_full = conv(x, edge_index)
+    assert out_full.shape == (4, 32)
+
+    out_sized = conv(x, edge_index, size=(4, 2))
+    assert out_sized.shape == (2, 32)
+    assert jnp.allclose(out_sized, out_full[:2], atol=1e-6)
 
 
 # TODO: The following PyG GAT test features are not implemented in JraphX:

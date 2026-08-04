@@ -50,6 +50,11 @@ def test_sage_conv_bipartite():
     out1 = conv((x1, x2), edge_index, size=(4, 2))
     assert out1.shape == (2, 32)  # Should have target node count
 
+    # The sizes are implied by the two feature tables, so `size` is optional
+    out2 = conv((x1, x2), edge_index)
+    assert out2.shape == (2, 32)
+    assert jnp.allclose(out1, out2)
+
 
 def test_sage_conv_lazy():
     """Test lazy initialization behavior."""

@@ -125,14 +125,14 @@ class JumpingKnowledge(nnx.Module):
 
             # Forward pass through time
             for t in range(self.num_layers):
-                # GRUCell returns (output, new_state) tuple
-                _, hidden_forward = self.rnn_forward(x[:, t, :], hidden_forward)
+                # GRUCell takes (carry, inputs) and returns (new_carry, output)
+                hidden_forward, _ = self.rnn_forward(hidden_forward, x[:, t, :])
                 forward_outputs.append(hidden_forward)
 
             # Backward pass through time
             for t in range(self.num_layers - 1, -1, -1):
-                # GRUCell returns (output, new_state) tuple
-                _, hidden_backward = self.rnn_backward(x[:, t, :], hidden_backward)
+                # GRUCell takes (carry, inputs) and returns (new_carry, output)
+                hidden_backward, _ = self.rnn_backward(hidden_backward, x[:, t, :])
                 backward_outputs.append(hidden_backward)
 
             # Reverse backward outputs to match time order

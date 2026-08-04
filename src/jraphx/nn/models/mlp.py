@@ -46,12 +46,14 @@ class MLP(nnx.Module):
             Will override :attr:`feature_list`. (default: :obj:`None`)
         dropout_rate (float, optional): Dropout probability of each
             hidden embedding. (default: :obj:`0.`)
-        act (Callable, optional): The non-linear activation function to
-            use. (default: :obj:`jax.nn.relu`)
+        act (Callable, optional): The non-linear activation function to use, or
+            :obj:`None` to disable the activation entirely.
+            (default: :obj:`jax.nn.relu`)
         act_first (bool, optional): If set to :obj:`True`, activation is
             applied before normalization. (default: :obj:`False`)
-        norm (str or Callable, optional): The normalization function to
-            use. (default: :obj:`None`)
+        norm (str, optional): The normalization function to use
+            (:obj:`"batch_norm"`, :obj:`"layer_norm"` or :obj:`None`). Any
+            other value raises a :obj:`ValueError`. (default: :obj:`None`)
         plain_last (bool, optional): If set to :obj:`False`, will apply
             non-linearity, batch normalization and dropout to the last layer as
             well. (default: :obj:`True`)
@@ -69,7 +71,7 @@ class MLP(nnx.Module):
         out_features: int | None = None,
         num_layers: int | None = None,
         dropout_rate: float = 0.0,
-        act: Callable | None = None,
+        act: Callable | None = nnx.relu,
         act_first: bool = False,
         norm: str | None = None,
         plain_last: bool = True,
@@ -104,7 +106,7 @@ class MLP(nnx.Module):
         self.feature_list = list(feature_list)
 
         # Set activation
-        self.act = act if act is not None else nnx.relu
+        self.act = act
         self.act_first = act_first
         self.plain_last = plain_last
         self.dropout_rate = dropout_rate
@@ -122,6 +124,14 @@ class MLP(nnx.Module):
                     use_bias=bias,
                     rngs=rngs,
                 )
+            )
+
+        # Validate the normalization choice once, so a typo cannot silently
+        # disable normalization for the whole network
+        if norm is not None and norm not in ("batch_norm", "layer_norm"):
+            raise ValueError(
+                f"Unknown normalization {norm!r}; expected one of "
+                "'batch_norm', 'layer_norm', or None"
             )
 
         # Create normalization layers
@@ -161,14 +171,12 @@ class MLP(nnx.Module):
         self,
         x: jnp.ndarray,
         batch: jnp.ndarray | None = None,
-        batch_size: int | None = None,
     ) -> jnp.ndarray:
         """Forward pass.
 
         Args:
             x: Input features [num_nodes, in_features]
-            batch: Batch vector for batch normalization
-            batch_size: Number of graphs in batch
+            batch: Batch vector used by ``batch_norm``
 
         Returns:
             Output features [num_nodes, out_features]

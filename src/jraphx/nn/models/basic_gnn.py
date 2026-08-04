@@ -13,6 +13,11 @@ from jraphx.nn.norm import BatchNorm, GraphNorm, LayerNorm
 class BasicGNN(nnx.Module):
     r"""An abstract class for implementing basic GNN models.
 
+    Subclasses declare which optional edge information their convolution
+    accepts through the :obj:`supports_edge_weight` and
+    :obj:`supports_edge_attr` class attributes; the forward pass only forwards
+    an argument that the underlying convolution actually consumes.
+
     Args:
         in_features (int or tuple): Size of each input sample, or :obj:`-1` to
             derive the size from the first input(s) to the forward method.
@@ -24,12 +29,14 @@ class BasicGNN(nnx.Module):
             final linear transformation to convert hidden node embeddings to
             output size :obj:`out_features`. (default: :obj:`None`)
         dropout_rate (float, optional): Dropout probability. (default: :obj:`0.`)
-        act (Callable, optional): The non-linear activation function to
-            use. (default: :obj:`jax.nn.relu`)
+        act (Callable, optional): The non-linear activation function to use, or
+            :obj:`None` to disable the activation entirely.
+            (default: :obj:`jax.nn.relu`)
         act_first (bool, optional): If set to :obj:`True`, activation is
             applied before normalization. (default: :obj:`False`)
-        norm (str, optional): The normalization function to
-            use (:obj:`"batch_norm"`, :obj:`"layer_norm"`, :obj:`"graph_norm"`).
+        norm (str, optional): The normalization function to use
+            (:obj:`"batch_norm"`, :obj:`"layer_norm"`, :obj:`"graph_norm"` or
+            :obj:`None`). Any other value raises a :obj:`ValueError`.
             (default: :obj:`None`)
         jk (str, optional): The Jumping Knowledge mode
             (:obj:`"last"`, :obj:`"cat"`, :obj:`"max"`, :obj:`"lstm"`).
@@ -40,6 +47,9 @@ class BasicGNN(nnx.Module):
         **kwargs (optional): Additional arguments for the specific convolution layer.
     """
 
+    supports_edge_weight: bool = False
+    supports_edge_attr: bool = False
+
     def __init__(
         self,
         in_features: int,
@@ -47,7 +57,7 @@ class BasicGNN(nnx.Module):
         num_layers: int,
         out_features: int | None = None,
         dropout_rate: float = 0.0,
-        act: Callable | None = None,
+        act: Callable | None = nnx.relu,
         act_first: bool = False,
         norm: str | None = None,
         jk: str | None = None,
@@ -61,7 +71,7 @@ class BasicGNN(nnx.Module):
         self.hidden_features = hidden_features
         self.num_layers = num_layers
         self.dropout_rate = dropout_rate
-        self.act = act if act is not None else nnx.relu
+        self.act = act
         self.act_first = act_first
         self.norm_type = norm
         self.jk_mode = jk
@@ -81,27 +91,33 @@ class BasicGNN(nnx.Module):
 
         # Create convolution layers
         self.convs = nnx.List([])
+        if num_layers >= 1:
+            layer_in = in_features
 
-        # First layer
-        if num_layers > 0:
-            self.convs.append(self.init_conv(in_features, hidden_features, rngs=rngs, **kwargs))
+            # First layer (only distinct from the last one for deeper networks)
+            if num_layers > 1:
+                self.convs.append(self.init_conv(layer_in, hidden_features, rngs=rngs, **kwargs))
+                layer_in = hidden_features
 
-        # Hidden layers
-        for _ in range(num_layers - 2):
-            self.convs.append(self.init_conv(hidden_features, hidden_features, rngs=rngs, **kwargs))
+            # Hidden layers
+            for _ in range(num_layers - 2):
+                self.convs.append(self.init_conv(layer_in, hidden_features, rngs=rngs, **kwargs))
 
-        # Last layer
-        if num_layers >= 2:
+            # Last layer, which produces out_features unless JumpingKnowledge
+            # aggregates the layer-wise representations instead
             if out_features is not None and jk is None:
-                # Output layer with different dimensions
-                self.convs.append(
-                    self.init_conv(hidden_features, out_features, rngs=rngs, **kwargs)
-                )
+                last_out = out_features
             else:
-                # Keep hidden dimensions
-                self.convs.append(
-                    self.init_conv(hidden_features, hidden_features, rngs=rngs, **kwargs)
-                )
+                last_out = hidden_features
+            self.convs.append(self.init_conv(layer_in, last_out, rngs=rngs, **kwargs))
+
+        # Validate the normalization choice once, so a typo cannot silently
+        # disable normalization for the whole model
+        if norm is not None and norm not in ("batch_norm", "layer_norm", "graph_norm"):
+            raise ValueError(
+                f"Unknown normalization {norm!r}; expected one of "
+                "'batch_norm', 'layer_norm', 'graph_norm', or None"
+            )
 
         # Create normalization layers
         self.norms = nnx.List([])
@@ -154,17 +170,17 @@ class BasicGNN(nnx.Module):
         edge_weight: jnp.ndarray | None = None,
         edge_attr: jnp.ndarray | None = None,
         batch: jnp.ndarray | None = None,
-        batch_size: int | None = None,
     ) -> jnp.ndarray:
         """Forward pass.
 
         Args:
             x: Node features [num_nodes, in_features]
             edge_index: Edge indices [2, num_edges]
-            edge_weight: Edge weights [num_edges]
-            edge_attr: Edge attributes [num_edges, edge_dim]
-            batch: Batch vector for batch normalization
-            batch_size: Number of graphs in batch
+            edge_weight: Edge weights [num_edges], forwarded only if the
+                convolution supports edge weights
+            edge_attr: Edge attributes [num_edges, edge_dim], forwarded only if
+                the convolution supports edge attributes
+            batch: Batch vector used by ``batch_norm`` and ``graph_norm``
 
         Returns:
             Output node features [num_nodes, out_features]
@@ -173,20 +189,20 @@ class BasicGNN(nnx.Module):
 
         for i, conv in enumerate(self.convs):
             # Store input for residual connection
-            if self.residual and i > 0:
+            if self.residual:
                 x_res = x
 
-            # Convolution
-            # Check what the conv layer supports
-            if edge_attr is not None and hasattr(conv, "edge_dim"):
-                x = conv(x, edge_index, edge_attr)
-            elif edge_weight is not None:
+            # Convolution, forwarding only the edge information this model's
+            # convolution actually consumes
+            if self.supports_edge_weight and edge_weight is not None:
                 x = conv(x, edge_index, edge_weight)
+            elif self.supports_edge_attr and edge_attr is not None:
+                x = conv(x, edge_index, edge_attr)
             else:
                 x = conv(x, edge_index)
 
-            # Add residual connection (skip first layer)
-            if self.residual and i > 0 and x_res.shape == x.shape:
+            # Add residual connection whenever the widths line up
+            if self.residual and x_res.shape == x.shape:
                 x = x + x_res
 
             # Apply normalization, activation, dropout (except possibly last layer)
@@ -198,9 +214,7 @@ class BasicGNN(nnx.Module):
                 # Normalization
                 if self.norms[i] is not None:
                     norm = self.norms[i]
-                    if self.norm_type == "batch_norm" and batch is not None:
-                        x = norm(x, batch)
-                    elif self.norm_type == "graph_norm" and batch is not None:
+                    if self.norm_type in ("batch_norm", "graph_norm") and batch is not None:
                         x = norm(x, batch)
                     else:
                         x = norm(x)

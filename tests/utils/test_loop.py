@@ -230,6 +230,33 @@ def test_add_self_loops_string_empty_graph():
     assert jnp.allclose(edge_attr_new[-3:], expected_attrs)
 
 
+def test_add_self_loops_string_fill_value_without_num_nodes():
+    """String fill values work when the node count has to be inferred."""
+    edge_index = jnp.array([[0, 1], [1, 2]])
+    edge_attr = jnp.array([[1.0], [2.0]])
+
+    out_index, out_attr = add_self_loops(edge_index, edge_attr, fill_value="mean")
+
+    expected_index = jnp.array([[0, 1, 0, 1, 2], [1, 2, 0, 1, 2]])
+    # Node 0 has no incoming edge -> 0, node 1 receives 1.0, node 2 receives 2.0.
+    expected_attr = jnp.array([[1.0], [2.0], [0.0], [1.0], [2.0]])
+
+    assert jnp.array_equal(out_index, expected_index)
+    assert jnp.allclose(out_attr, expected_attr)
+
+
+def test_add_self_loops_fill_value_sum_alias():
+    """``fill_value='sum'`` is accepted as the torch_geometric spelling of 'add'."""
+    edge_index = jnp.array([[0, 1, 0], [1, 1, 1]])
+    edge_attr = jnp.array([[1.0], [2.0], [3.0]])
+
+    _, attr_sum = add_self_loops(edge_index, edge_attr, fill_value="sum", num_nodes=2)
+    _, attr_add = add_self_loops(edge_index, edge_attr, fill_value="add", num_nodes=2)
+
+    assert jnp.allclose(attr_sum, attr_add)
+    assert jnp.allclose(attr_sum[-2:], jnp.array([[0.0], [6.0]]))
+
+
 # TODO: The following features from PyG are not yet implemented in JraphX:
 # - contains_self_loops() function - can be implemented using simple comparison
 # - segregate_self_loops() function - would separate self-loops from other edges

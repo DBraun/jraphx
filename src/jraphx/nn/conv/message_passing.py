@@ -8,8 +8,41 @@ from typing import Literal, Union
 
 import jax.numpy as jnp
 from flax.nnx import Module
+from jax.core import Tracer
 
 from jraphx.utils.scatter import scatter_add, scatter_max, scatter_mean, scatter_min
+
+
+def _validate_index_range(index: jnp.ndarray, num_nodes: int, role: str) -> None:
+    """Check that gather indices address an existing row of a node table.
+
+    :func:`jax.numpy.take` fills out-of-range positions with ``NaN`` instead of
+    raising, which silently poisons the aggregated output. The check is skipped
+    for traced indices, since their values are unavailable at trace time.
+
+    Args:
+        index: Node indices used to gather one endpoint of every edge.
+        num_nodes: Number of rows of the table being gathered from.
+        role: Endpoint name used in the error message.
+
+    Raises:
+        IndexError: If a concrete index is negative or not smaller than
+            ``num_nodes``.
+    """
+    if isinstance(index, Tracer):
+        return
+
+    index = jnp.asarray(index)
+    if index.size == 0:
+        return
+
+    lowest = int(index.min())
+    highest = int(index.max())
+    if lowest < 0 or highest >= num_nodes:
+        raise IndexError(
+            f"{role} indices span [{lowest}, {highest}], which does not fit a node "
+            f"table of {num_nodes} rows"
+        )
 
 
 class MessagePassing(Module):
@@ -70,62 +103,75 @@ class MessagePassing(Module):
     ) -> jnp.ndarray:
         """Main propagation step that orchestrates message passing.
 
-        This method uses optimized JAX operations for efficient indexing
-        and gathering of node features.
+        Messages travel from source nodes :math:`j` to target nodes :math:`i`.
+        A bipartite graph is expressed by passing ``x`` as a tuple
+        ``(x_src, x_dst)``: ``x[0]`` holds the features of the source set and
+        ``x[1]`` those of the target set. The result therefore has
+        ``x[1].shape[0]`` rows for :obj:`flow="source_to_target"` and
+        ``x[0].shape[0]`` rows for :obj:`flow="target_to_source"`.
 
         Args:
             edge_index: Edge indices [2, num_edges]
-            x: Node features [num_nodes, features] or tuple for bipartite graphs
+            x: Node features [num_nodes, features], or a ``(x_src, x_dst)`` tuple
+                for bipartite graphs
             edge_attr: Optional edge features [num_edges, edge_features]
             size: Optional size (num_src_nodes, num_dst_nodes) for bipartite graphs
 
         Returns:
             Updated node features after message passing
+
+        Raises:
+            ValueError: If ``x`` is a tuple that does not hold exactly two feature
+                tables, or if such a tuple disagrees with an explicit ``size``.
+            IndexError: If a bipartite edge addresses a node outside of its table.
         """
-        # Handle bipartite vs regular graphs
-        if isinstance(x, tuple):
-            x_i, x_j = x
-            size = size or (x_j.shape[0], x_i.shape[0])
+        # The roles of the two rows of ``edge_index`` and of the two node tables
+        # swap together with the flow direction.
+        if self.flow == "source_to_target":
+            row, col = edge_index[0], edge_index[1]
+            src_pos, dst_pos = 0, 1
         else:
-            x_i = x_j = x
+            row, col = edge_index[1], edge_index[0]
+            src_pos, dst_pos = 1, 0
+
+        if isinstance(x, tuple):
+            if len(x) != 2:
+                raise ValueError(
+                    f"Bipartite `x` must be a 2-tuple (x_src, x_dst), got {len(x)} entries"
+                )
+            table_sizes = (x[0].shape[0], x[1].shape[0])
+            if size is None:
+                size = table_sizes
+            elif tuple(size) != table_sizes:
+                raise ValueError(
+                    f"size={tuple(size)} disagrees with the bipartite feature tables "
+                    f"{table_sizes}"
+                )
+            x_src_table, x_dst_table = x[src_pos], x[dst_pos]
+            _validate_index_range(row, size[src_pos], "Source")
+            _validate_index_range(col, size[dst_pos], "Target")
+            x_original = x[dst_pos]
+        else:
+            x_src_table = x_dst_table = x
             # If size is explicitly provided, use it (for bipartite cases)
             if size is None:
                 size = (x.shape[0], x.shape[0])
-
-        # Get source and target indices based on flow
-        if self.flow == "source_to_target":
-            row, col = edge_index[0], edge_index[1]
-        else:
-            row, col = edge_index[1], edge_index[0]
-
-        # Use efficient JAX indexing for gathering node features
-        # jnp.take is more efficient than direct indexing for large arrays
-        x_j_gathered = jnp.take(x_j, row, axis=0)  # Source nodes
-        x_i_gathered = jnp.take(x_i, col, axis=0)  # Target nodes
-
-        # Compute messages
-        messages = self.message(x_j_gathered, x_i_gathered, edge_attr)
-
-        # Aggregate messages
-        dim_size = size[1] if self.flow == "source_to_target" else size[0]
-
-        # Check if we can use fused message_and_aggregate
-        if hasattr(self, "message_and_aggregate") and self.aggr in [
-            "add",
-            "mean",
-            "max",
-            "min",
-        ]:
-            # Use fused operation if available
-            aggr_out = self.message_and_aggregate(x_j, edge_index, edge_attr, dim_size)
-        else:
-            aggr_out = self.aggregate(messages, col, dim_size)
-
-        # Update node embeddings
-        if isinstance(x, tuple):
-            x_original = x[1] if self.flow == "source_to_target" else x[0]
-        else:
             x_original = x
+
+        # Number of target nodes the messages are scattered into
+        dim_size = size[dst_pos]
+
+        # A subclass may fuse message construction and aggregation; the base class
+        # only provides the hook, so dispatch when it is genuinely overridden.
+        if type(self).message_and_aggregate is not MessagePassing.message_and_aggregate:
+            aggr_out = self.message_and_aggregate(x, edge_index, edge_attr, dim_size)
+        else:
+            # Use efficient JAX indexing for gathering node features
+            # jnp.take is more efficient than direct indexing for large arrays
+            x_j_gathered = jnp.take(x_src_table, row, axis=0)  # Source nodes
+            x_i_gathered = jnp.take(x_dst_table, col, axis=0)  # Target nodes
+            messages = self.message(x_j_gathered, x_i_gathered, edge_attr)
+            aggr_out = self.aggregate(messages, col, dim_size)
 
         out = self.update(aggr_out, x_original)
 
@@ -197,38 +243,34 @@ class MessagePassing(Module):
 
     def message_and_aggregate(
         self,
-        x: jnp.ndarray,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
         edge_index: jnp.ndarray,
         edge_attr: jnp.ndarray | None = None,
         dim_size: int | None = None,
     ) -> jnp.ndarray:
         """Fused message and aggregation for efficiency.
 
-        This can be overridden for more efficient implementations
-        when message computation and aggregation can be fused.
-        For example, for simple aggregations like sum/mean with
-        linear transformations, we can avoid materializing all messages.
+        Override this hook when message computation and aggregation can be fused
+        into a single pass, *e.g.* when a sum aggregation of linearly transformed
+        neighbours can be expressed without materializing all messages.
+        :meth:`propagate` dispatches here only for subclasses that override it,
+        in which case :meth:`message` and :meth:`aggregate` are not called.
 
         Args:
-            x: Node features
-            edge_index: Edge indices
-            edge_attr: Optional edge features
+            x: Node features, or a ``(x_src, x_dst)`` tuple for bipartite graphs
+            edge_index: Edge indices [2, num_edges]
+            edge_attr: Optional edge features [num_edges, edge_features]
+            dim_size: Number of target nodes to scatter into
 
         Returns:
-            Aggregated messages
+            Aggregated messages [dim_size, features]
+
+        Raises:
+            NotImplementedError: Always, as the base class provides no fused path.
         """
-        # Get indices based on flow
-        if self.flow == "source_to_target":
-            row, col = edge_index[0], edge_index[1]
-        else:
-            row, col = edge_index[1], edge_index[0]
-
-        # Efficient gathering using JAX operations
-        x_j = jnp.take(x, row, axis=0)
-        x_i = jnp.take(x, col, axis=0)
-
-        messages = self.message(x_j, x_i, edge_attr)
-        return self.aggregate(messages, col, dim_size or x.shape[0])
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement a fused `message_and_aggregate`"
+        )
 
     def __call__(
         self,

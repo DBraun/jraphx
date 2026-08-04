@@ -3,10 +3,20 @@
 Converted from PyTorch Geometric test_glob.py to test JraphX functionality.
 """
 
+import jax
 import jax.numpy as jnp
 import pytest
 
-from jraphx.nn.pool.glob import global_add_pool, global_max_pool, global_mean_pool
+from jraphx.nn.pool.glob import (
+    batched_global_add_pool,
+    batched_global_max_pool,
+    batched_global_mean_pool,
+    global_add_pool,
+    global_max_pool,
+    global_mean_pool,
+    global_min_pool,
+    global_softmax_pool,
+)
 
 
 def test_global_pool():
@@ -246,8 +256,6 @@ def test_different_graph_sizes():
 
 def test_jraphx_extensions():
     """Test JraphX-specific pooling extensions."""
-    from jraphx.nn.pool.glob import global_min_pool, global_softmax_pool
-
     x = jnp.array([[1.0, 5.0], [3.0, 2.0], [2.0, 4.0]])
 
     # Test min pooling
@@ -259,6 +267,79 @@ def test_jraphx_extensions():
     out_softmax = global_softmax_pool(x, None)
     assert out_softmax.shape == (1, 2)
     # Should be a weighted average, exact values depend on softmax weights
+
+
+def test_empty_graphs_pool_to_zero():
+    """Graphs without nodes pool to zeros instead of +/- infinity."""
+    x = jnp.array([[1.0, 5.0], [3.0, 2.0], [2.0, 4.0]])
+    batch = jnp.array([0, 0, 2])
+
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert jnp.all(jnp.isfinite(out_max))
+    assert jnp.all(jnp.isfinite(out_min))
+    assert jnp.allclose(out_max[1], jnp.zeros(2))
+    assert jnp.allclose(out_min[1], jnp.zeros(2))
+    assert jnp.allclose(out_max[0], jnp.array([3.0, 5.0]))
+    assert jnp.allclose(out_min[0], jnp.array([1.0, 2.0]))
+
+
+def test_infinite_inputs_are_preserved():
+    """Non-empty graphs keep genuinely infinite node features."""
+    x = jnp.array([[jnp.inf, 1.0], [2.0, -jnp.inf]])
+    batch = jnp.array([0, 0])
+
+    assert jnp.isinf(global_max_pool(x, batch)[0, 0])
+    assert jnp.isinf(global_min_pool(x, batch)[0, 1])
+
+
+def test_global_softmax_pool_single_graph_weights_nodes():
+    """Softmax pooling over a single graph normalizes across nodes, not features."""
+    x = jnp.array([[1.0, 0.0], [0.0, 3.0], [2.0, 2.0]])
+
+    out = global_softmax_pool(x, None)
+
+    weights = jax.nn.softmax(x.sum(axis=-1), axis=0).reshape(-1, 1)
+    expected = (x * weights).sum(axis=0, keepdims=True)
+    assert jnp.allclose(out, expected)
+    # A degenerate softmax would collapse to a plain sum over nodes.
+    assert not jnp.allclose(out, x.sum(axis=0, keepdims=True))
+
+
+def test_global_softmax_pool_matches_single_graph_batch():
+    """A batch vector with one graph reproduces the batch=None result."""
+    x = jnp.array([[1.0, 0.0], [0.0, 3.0], [2.0, 2.0]])
+    batch = jnp.zeros(3, dtype=jnp.int32)
+
+    assert jnp.allclose(global_softmax_pool(x, None), global_softmax_pool(x, batch))
+
+
+def test_pooling_under_jit_requires_size():
+    """Without `size`, the number of graphs cannot be inferred from a traced batch."""
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    batch = jnp.array([0, 0, 1])
+
+    with pytest.raises(ValueError, match="Pass `size="):
+        jax.jit(global_add_pool)(x, batch)
+
+    out = jax.jit(lambda x, batch: global_add_pool(x, batch, 2))(x, batch)
+    assert jnp.allclose(out, jnp.array([[4.0, 6.0], [5.0, 6.0]]))
+
+
+def test_batched_pooling_with_size():
+    """The vmapped wrappers work when the number of graphs is given."""
+    x = jnp.arange(24, dtype=jnp.float32).reshape(2, 4, 3)
+    batch = jnp.array([[0, 0, 1, 1], [0, 1, 1, 1]])
+
+    out_add = batched_global_add_pool(x, batch, 2)
+    out_mean = batched_global_mean_pool(x, batch, 2)
+    out_max = batched_global_max_pool(x, batch, 2)
+
+    assert out_add.shape == (2, 2, 3)
+    assert jnp.allclose(out_add[0, 0], x[0, :2].sum(axis=0))
+    assert jnp.allclose(out_mean[1, 1], x[1, 1:].mean(axis=0))
+    assert jnp.allclose(out_max[0, 1], x[0, 2:].max(axis=0))
 
 
 if __name__ == "__main__":

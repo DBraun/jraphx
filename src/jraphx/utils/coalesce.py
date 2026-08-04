@@ -2,7 +2,7 @@
 
 from jax import numpy as jnp
 
-from jraphx.utils.scatter import scatter_add, scatter_max, scatter_mean, scatter_min
+from jraphx.utils.scatter import scatter
 
 
 def coalesce(
@@ -20,53 +20,43 @@ def coalesce(
         edge_attr (jax.Array, optional): Edge weights
             or multi-dimensional edge features. (default: :obj:`None`)
         num_nodes (int, optional): The number of nodes, *i.e.*
-            :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
+            :obj:`max_val + 1` of :attr:`edge_index`. Used only to validate
+            :attr:`edge_index`. (default: :obj:`None`)
         reduce (str, optional): The reduce operation to use for merging edge
-            features (:obj:`"add"`, :obj:`"mean"`, :obj:`"min"`, :obj:`"max"`).
-            (default: :obj:`"add"`)
+            features (:obj:`"add"` / :obj:`"sum"`, :obj:`"mean"`,
+            :obj:`"min"`, :obj:`"max"`). (default: :obj:`"add"`)
 
     Returns:
         Tuple of (coalesced edge_index, coalesced edge_attr).
 
+    Raises:
+        ValueError: If :attr:`edge_index` addresses a node outside of
+            :attr:`num_nodes`.
+
     .. note::
-        For JIT compatibility, :obj:`num_nodes` should be provided as a static
-        integer when possible.
+        The number of unique edges is data-dependent, so this function cannot
+        be traced by :obj:`jax.jit`.
     """
     if edge_index.shape[1] == 0:
         return edge_index, edge_attr
 
-    # Create unique edge identifiers
-    row, col = edge_index[0], edge_index[1]
+    if num_nodes is not None:
+        max_index = int(edge_index.max())
+        if max_index >= num_nodes:
+            raise ValueError(
+                f"`edge_index` contains node {max_index}, which is out of range "
+                f"for a graph with {num_nodes} nodes"
+            )
 
-    # Get maximum node index to create unique IDs
-    if num_nodes is None:
-        num_nodes = jnp.max(edge_index) + 1
+    # Lexicographic de-duplication of the (row, col) columns. Working on the
+    # index pair directly keeps this exact for any node count, unlike packing
+    # the pair into a single integer key.
+    unique_edge_index, inverse_indices = jnp.unique(edge_index, axis=1, return_inverse=True)
+    inverse_indices = inverse_indices.reshape(-1)
+    num_unique = unique_edge_index.shape[1]
 
-    # Create unique edge IDs by combining row and col indices
-    edge_ids = row * num_nodes + col
-
-    # Find unique edges
-    unique_ids, inverse_indices = jnp.unique(edge_ids, return_inverse=True)
-
-    # Reconstruct unique edge indices
-    unique_row = unique_ids // num_nodes
-    unique_col = unique_ids % num_nodes
-    unique_edge_index = jnp.stack([unique_row, unique_col], axis=0)
-
-    # Handle edge attributes
     if edge_attr is not None:
-        # Aggregate duplicate edge attributes
-        if reduce == "add":
-            unique_attr = scatter_add(edge_attr, inverse_indices, dim_size=len(unique_ids), dim=0)
-        elif reduce == "mean":
-            unique_attr = scatter_mean(edge_attr, inverse_indices, dim_size=len(unique_ids), dim=0)
-        elif reduce == "max":
-            unique_attr = scatter_max(edge_attr, inverse_indices, dim_size=len(unique_ids), dim=0)
-        elif reduce == "min":
-            unique_attr = scatter_min(edge_attr, inverse_indices, dim_size=len(unique_ids), dim=0)
-        else:
-            raise ValueError(f"Unknown reduce operation: {reduce}")
-
+        unique_attr = scatter(edge_attr, inverse_indices, dim_size=num_unique, dim=0, reduce=reduce)
         return unique_edge_index, unique_attr
 
     return unique_edge_index, None

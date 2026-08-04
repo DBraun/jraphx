@@ -193,17 +193,17 @@ Efficient Scatter Operations
 
 .. code-block:: python
 
-   from jraphx.utils.scatter import scatter_sum, scatter_max
+   from jraphx.utils.scatter import scatter_add, scatter_max
 
    def efficient_aggregation(src, index, dim_size):
        """Combine multiple scatter operations efficiently."""
 
        # Compute multiple aggregations in single pass
-       sum_result = scatter_sum(src, index, dim_size=dim_size)
+       sum_result = scatter_add(src, index, dim_size=dim_size)
        max_result = scatter_max(src, index, dim_size=dim_size)
 
        # Avoid redundant computations
-       mean_result = sum_result / scatter_sum(
+       mean_result = sum_result / scatter_add(
            jnp.ones_like(src), index, dim_size=dim_size
        )
 

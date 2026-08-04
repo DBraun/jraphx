@@ -77,41 +77,103 @@ def test_batch_norm_running_stats():
     norm = BatchNorm(16, track_running_stats=True, rngs=nnx.Rngs(42))
 
     # Initial running stats should be zeros and ones
-    assert jnp.allclose(norm.running_mean.value, jnp.zeros(16))
-    assert jnp.allclose(norm.running_var.value, jnp.ones(16))
-    assert norm.num_batches_tracked.value == 0
+    assert jnp.allclose(norm.running_mean[...], jnp.zeros(16))
+    assert jnp.allclose(norm.running_var[...], jnp.ones(16))
+    assert norm.num_batches_tracked[...] == 0
 
     # Process first batch
     _ = norm(x1, use_running_average=False)
-    assert norm.num_batches_tracked.value == 1
+    assert norm.num_batches_tracked[...] == 1
 
     # Process second batch
     _ = norm(x2, use_running_average=False)
-    assert norm.num_batches_tracked.value == 2
+    assert norm.num_batches_tracked[...] == 2
 
     # Running stats should have been updated
-    assert not jnp.allclose(norm.running_mean.value, jnp.zeros(16))
-    assert not jnp.allclose(norm.running_var.value, jnp.ones(16))
+    assert not jnp.allclose(norm.running_mean[...], jnp.zeros(16))
+    assert not jnp.allclose(norm.running_var[...], jnp.ones(16))
 
 
 def test_batch_norm_with_batch():
-    """Test BatchNorm with batch assignment vector."""
+    """The batch vector is ignored: statistics are pooled over the whole mini-batch."""
     key = random.PRNGKey(42)
     x = random.normal(key, (200, 16))
-    # Create batch vector: 4 graphs with 50 nodes each
-    batch = jnp.repeat(jnp.arange(4), 50)
+    # Graphs of deliberately unequal size, so an unweighted mean-of-means differs
+    batch = jnp.concatenate(
+        [
+            jnp.zeros(150, dtype=jnp.int32),
+            jnp.ones(40, dtype=jnp.int32),
+            jnp.full(10, 2, dtype=jnp.int32),
+        ]
+    )
 
     norm = BatchNorm(16, track_running_stats=False, rngs=nnx.Rngs(42))
     out = norm(x, batch)
 
     assert out.shape == (200, 16)
-
-    # Note: per-batch stats are averaged, so individual batch means won't be exactly 0
-    # but the overall mean should still be close to 0
+    assert jnp.allclose(out, norm(x))
 
     overall_mean = out.mean(axis=0)
-    # overall_std = out.std(axis=0)  # Not used in assertions
+    overall_std = out.std(axis=0)
     assert jnp.allclose(overall_mean, jnp.zeros_like(overall_mean), atol=1e-5)
+    assert jnp.allclose(overall_std, jnp.ones_like(overall_std), atol=1e-4)
+
+
+def test_batch_norm_unequal_graphs_are_not_reweighted():
+    """A single large-valued graph must not be down-weighted by graph count."""
+    x = jnp.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [10.0, 10.0], [0.0, 0.0]])
+    batch = jnp.array([0, 0, 0, 1, 1], dtype=jnp.int32)
+
+    norm = BatchNorm(2, track_running_stats=False, rngs=nnx.Rngs(0))
+    out = norm(x, batch)
+
+    expected = (x - x.mean(axis=0)) / jnp.sqrt(x.var(axis=0) + norm.eps)
+    assert jnp.allclose(out, expected, atol=1e-5)
+    assert jnp.allclose(out.mean(axis=0), jnp.zeros(2), atol=1e-5)
+    assert jnp.allclose(out.var(axis=0), jnp.ones(2), atol=1e-4)
+
+
+def test_batch_norm_jit_with_batch():
+    """BatchNorm traces under ``nnx.jit``, including when a batch vector is passed."""
+    key = random.PRNGKey(0)
+    x = random.normal(key, (12, 4))
+    batch = jnp.array([0] * 7 + [1] * 5, dtype=jnp.int32)
+
+    norm = BatchNorm(4, track_running_stats=True, rngs=nnx.Rngs(0))
+
+    @nnx.jit
+    def run(module: BatchNorm, features: jnp.ndarray, batch_vector: jnp.ndarray) -> jnp.ndarray:
+        return module(features, batch_vector)
+
+    out = run(norm, x, batch)
+    assert out.shape == (12, 4)
+    assert norm.num_batches_tracked[...] == 1
+    assert bool(jnp.all(jnp.isfinite(out)))
+
+
+def test_batch_norm_running_stats_are_batch_stats():
+    """Running statistics split out under the standard ``nnx.BatchStat`` filter."""
+    norm = BatchNorm(8, track_running_stats=True, rngs=nnx.Rngs(0))
+
+    params = nnx.state(norm, nnx.Param)
+    batch_stats = nnx.state(norm, nnx.BatchStat)
+
+    assert set(params.keys()) == {"weight", "bias"}
+    assert set(batch_stats.keys()) == {"running_mean", "running_var", "num_batches_tracked"}
+
+
+def test_batch_norm_running_var_is_unbiased():
+    """``running_var`` tracks the unbiased variance, matching PyTorch/PyG."""
+    key = random.PRNGKey(1)
+    x = random.normal(key, (10, 4))
+
+    norm = BatchNorm(4, momentum=0.0, track_running_stats=True, rngs=nnx.Rngs(0))
+    norm(x, use_running_average=False)
+
+    n = x.shape[0]
+    unbiased = x.var(axis=0) * n / (n - 1)
+    assert jnp.allclose(norm.running_var[...], unbiased, atol=1e-5)
+    assert jnp.allclose(norm.running_mean[...], x.mean(axis=0), atol=1e-5)
 
 
 # TODO: HeteroBatchNorm is not implemented in JraphX
@@ -125,4 +187,8 @@ if __name__ == "__main__":
     test_batch_norm_statistics()
     test_batch_norm_running_stats()
     test_batch_norm_with_batch()
+    test_batch_norm_unequal_graphs_are_not_reweighted()
+    test_batch_norm_jit_with_batch()
+    test_batch_norm_running_stats_are_batch_stats()
+    test_batch_norm_running_var_is_unbiased()
     print("All BatchNorm tests passed!")

@@ -160,31 +160,27 @@ def test_gat(out_dim, dropout, act, norm, jk):
 
 @pytest.mark.parametrize("out_dim", out_dims)
 @pytest.mark.parametrize("jk", jks)
-def test_one_layer_gnn(out_dim, jk):
-    """Test GNN models with single layer."""
+@pytest.mark.parametrize("model_cls", [GCN, GraphSAGE, GIN, GAT])
+def test_one_layer_gnn(out_dim, jk, model_cls):
+    """A single-layer model honours out_features exactly like a deeper one."""
     x, edge_index = create_test_data()
+    out_features = 16 if out_dim is None else out_dim
 
-    # TODO: JraphX BasicGNN has a design limitation for single-layer networks:
-    # - When num_layers=1 and jk=None, the output size is always hidden_features
-    # - When num_layers=1 and jk is not None, final projection is applied
-    if jk is None:
-        # Single layer without JK always outputs hidden_features
-        out_features = 16  # hidden_features
-    else:
-        # With JK, final linear projection is applied
-        out_features = 16 if out_dim is None else out_dim
-
-    model = GraphSAGE(
+    kwargs = {"heads": 4} if model_cls is GAT else {}
+    model = model_cls(
         in_features=8,
         hidden_features=16,
         num_layers=1,
         out_features=out_dim,
         jk=jk,
         rngs=nnx.Rngs(42),
+        **kwargs,
     )
 
     output = model(x, edge_index)
     assert output.shape == (3, out_features)
+    # The advertised width and the emitted width must not drift apart
+    assert model.out_features == output.shape[-1]
 
 
 def test_batch_processing():
@@ -231,6 +227,118 @@ def test_residual_connections():
 
     output = model(x, edge_index)
     assert output.shape == (3, 8)
+
+
+def test_unknown_norm_raises():
+    """An unrecognized normalization name is rejected instead of silently ignored."""
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        GCN(
+            in_features=8,
+            hidden_features=16,
+            num_layers=2,
+            out_features=4,
+            norm="layernorm",
+            rngs=nnx.Rngs(42),
+        )
+
+
+def test_act_none_disables_activation():
+    """``act=None`` composes the convolutions without any non-linearity."""
+    x, edge_index = create_test_data()
+
+    model = GCN(
+        in_features=8,
+        hidden_features=8,
+        num_layers=2,
+        out_features=8,
+        act=None,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model.convs[1](model.convs[0](x, edge_index), edge_index)
+    assert jnp.allclose(model(x, edge_index), expected, atol=1e-6)
+
+    relu_model = GCN(
+        in_features=8,
+        hidden_features=8,
+        num_layers=2,
+        out_features=8,
+        act=nnx.relu,
+        rngs=nnx.Rngs(42),
+    )
+    assert not jnp.allclose(relu_model(x, edge_index), expected, atol=1e-6)
+
+
+def test_residual_applies_to_first_layer():
+    """The residual connection is added whenever the widths line up."""
+    x, edge_index = create_test_data()
+
+    model = GraphSAGE(
+        in_features=8,
+        hidden_features=8,
+        num_layers=1,
+        out_features=8,
+        residual=True,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model.convs[0](x, edge_index) + x
+    assert jnp.allclose(model(x, edge_index), expected, atol=1e-6)
+
+
+def test_edge_weight_is_not_passed_as_edge_attr():
+    """Edge weights only reach convolutions that support them."""
+    x, edge_index = create_test_data()
+    edge_weight = jnp.array([0.5, 1.5, 2.5, 3.5])
+
+    # GAT consumes edge attributes, not edge weights: a one-dimensional
+    # edge_weight must not be reinterpreted as an edge feature
+    gat = GAT(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        edge_dim=1,
+        rngs=nnx.Rngs(42),
+    )
+    assert jnp.allclose(gat(x, edge_index, edge_weight=edge_weight), gat(x, edge_index), atol=1e-6)
+
+    # ... while a genuine edge attribute does change the GAT output
+    edge_attr = edge_weight.reshape(-1, 1)
+    assert not jnp.allclose(gat(x, edge_index, edge_attr=edge_attr), gat(x, edge_index), atol=1e-6)
+
+    # GCN does consume edge weights
+    gcn = GCN(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        rngs=nnx.Rngs(42),
+    )
+    assert not jnp.allclose(
+        gcn(x, edge_index, edge_weight=edge_weight), gcn(x, edge_index), atol=1e-6
+    )
+
+
+def test_gin_inner_mlp_configuration():
+    """The MLP inside GINConv drops no activations twice and never uses GraphNorm."""
+    model = GIN(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        dropout_rate=0.5,
+        norm="graph_norm",
+        rngs=nnx.Rngs(42),
+    )
+
+    # Dropout is applied once per block, by the model and not by the inner MLP
+    assert model.dropout is not None
+    assert model.convs[0].nn.dropout is None
+
+    # GraphNorm is applied between blocks; the inner MLP normalizes per node
+    assert type(model.norms[0]).__name__ == "GraphNorm"
+    assert type(model.convs[0].nn.norms[0]).__name__ == "LayerNorm"
 
 
 def test_different_output_features():

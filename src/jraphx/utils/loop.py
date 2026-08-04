@@ -26,8 +26,8 @@ def add_self_loops(
         fill_value (float or str, optional): The way to generate edge features of
             self-loops. If float, edge features are set to this value.
             If str, edge features are computed by aggregating existing edge features
-            that point to each node using the specified reduction ('mean', 'add', 'max', 'min').
-            (default: :obj:`1.0`)
+            that point to each node using the specified reduction ('mean', 'add'
+            (alias 'sum'), 'max', 'min'). (default: :obj:`1.0`)
         num_nodes (int, optional): The number of nodes, *i.e.*
             :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
 
@@ -35,14 +35,14 @@ def add_self_loops(
         Tuple of (edge_index with self-loops, edge_attr with self-loops).
 
     .. note::
-        For JIT compatibility, :obj:`num_nodes` should be provided as a static
-        integer when possible.
+        The output shape depends on :obj:`num_nodes`, so it must be given as a
+        static integer under :obj:`jax.jit`. Inferring it from
+        :attr:`edge_index` reads the array on the host.
     """
-    # JIT-compatible: Use shape directly when num_nodes not provided
     if num_nodes is None:
         if edge_index.size == 0:
             return edge_index, edge_attr
-        num_nodes = edge_index.max() + 1
+        num_nodes = int(edge_index.max()) + 1
 
     # Handle edge attributes first (before modifying edge_index)
     if edge_attr is not None:
@@ -64,8 +64,7 @@ def add_self_loops(
                 )
         edge_attr = jnp.concatenate([edge_attr, loop_attr], axis=0)
 
-    # Create self-loop edges - using dynamic shape-dependent arange
-    # This works in JIT because num_nodes is now a traced value
+    # One self-loop per node
     loop_index = jnp.arange(num_nodes)
     loop_index = jnp.stack([loop_index, loop_index], axis=0)
 
@@ -119,12 +118,15 @@ def add_remaining_self_loops(
 
     Returns:
         Tuple of (edge_index with self-loops, edge_attr with self-loops)
+
+    .. note::
+        The number of added self-loops is data-dependent, so this function
+        cannot be traced by :obj:`jax.jit`.
     """
-    # JIT-compatible: Use shape directly when num_nodes not provided
     if num_nodes is None:
         if edge_index.size == 0:
             return edge_index, edge_attr
-        num_nodes = edge_index.max() + 1
+        num_nodes = int(edge_index.max()) + 1
 
     # Find existing self-loops
     row, col = edge_index[0], edge_index[1]

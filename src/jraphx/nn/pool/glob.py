@@ -1,10 +1,12 @@
 """Global pooling operations for graph-level representations.
 
-This module provides efficient pooling operations that:
-1. Cache batch size computations when possible
-2. Support optional batch_size parameter to avoid repeated max() calls
-3. Handle edge cases efficiently (single graph, no batch)
-4. Use JAX segment operations directly for best performance
+This module provides pooling operations that:
+1. Support an optional ``size`` parameter that makes the number of graphs static
+2. Handle edge cases explicitly (single graph, no batch, empty graphs)
+3. Use JAX segment operations directly for best performance
+
+Under :func:`jax.jit` or :func:`jax.vmap` the number of graphs cannot be read off a
+traced batch vector, so ``size`` must be passed explicitly there.
 """
 
 from functools import partial
@@ -16,23 +18,55 @@ from jax.ops import segment_max, segment_min, segment_sum
 
 
 def _get_batch_size(batch: jnp.ndarray | None, size: int | None = None) -> int:
-    """Efficiently compute batch size.
+    """Resolve the number of graphs as a static Python integer.
 
     Args:
         batch: Batch indices [num_nodes]
-        size: Optional batch size
+        size: Number of graphs, if known
 
     Returns:
         Number of graphs in batch
+
+    Raises:
+        ValueError: If ``size`` is not given and ``batch`` is a traced array, since the
+            number of graphs would then depend on traced values.
     """
     if size is not None:
-        return size
+        return int(size)
 
     if batch is None:
         return 1
 
-    # Use JAX's max directly without int conversion until needed
-    return batch.max() + 1
+    if isinstance(batch, jax.core.Tracer):
+        raise ValueError(
+            "The number of graphs cannot be inferred from a traced batch vector. "
+            "Pass `size=<num_graphs>` when pooling inside jax.jit or jax.vmap."
+        )
+
+    return int(batch.max()) + 1
+
+
+def _zero_empty_segments(pooled: jnp.ndarray, batch: jnp.ndarray, batch_size: int) -> jnp.ndarray:
+    """Replace the reduction identity of empty graphs by zeros.
+
+    :func:`jax.ops.segment_max` and :func:`jax.ops.segment_min` fill segments without any
+    node with :math:`\\mp\\infty`. Graph-level features of empty graphs are zero instead,
+    which matches PyTorch Geometric and keeps downstream layers finite.
+
+    Args:
+        pooled: Graph-level features [batch_size, num_features]
+        batch: Batch indices for each node [num_nodes]
+        batch_size: Number of graphs
+
+    Returns:
+        Graph-level features with empty graphs zeroed out
+    """
+    counts = segment_sum(
+        jnp.ones(batch.shape[0], dtype=jnp.int32),
+        batch,
+        num_segments=batch_size,
+    )
+    return jnp.where((counts > 0).reshape(-1, 1), pooled, jnp.zeros_like(pooled))
 
 
 def global_add_pool(
@@ -55,7 +89,8 @@ def global_add_pool(
             :math:`\mathbf{b} \in {\{ 0, \ldots, B-1\}}^N`, which assigns
             each node to a specific example.
         size (int, optional): The number of examples :math:`B`.
-            Automatically calculated if not given. (default: :obj:`None`)
+            Automatically calculated if not given, which requires ``batch`` to be a
+            concrete (non-traced) array. (default: :obj:`None`)
 
     Returns:
         jax.Array: Graph-level features :math:`\mathbf{R} \in \mathbb{R}^{B \times F}`.
@@ -95,7 +130,8 @@ def global_mean_pool(
             :math:`\mathbf{b} \in {\{ 0, \ldots, B-1\}}^N`, which assigns
             each node to a specific example.
         size (int, optional): The number of examples :math:`B`.
-            Automatically calculated if not given. (default: :obj:`None`)
+            Automatically calculated if not given, which requires ``batch`` to be a
+            concrete (non-traced) array. (default: :obj:`None`)
 
     Returns:
         jax.Array: Graph-level features :math:`\mathbf{R} \in \mathbb{R}^{B \times F}`.
@@ -131,14 +167,15 @@ def global_max_pool(
     batch: jnp.ndarray | None = None,
     size: int | None = None,
 ) -> jnp.ndarray:
-    """Optimized global max pooling over a batch of graphs.
+    """Global max pooling over a batch of graphs.
 
-    Computes the maximum of node features for each graph in the batch.
+    Computes the maximum of node features for each graph in the batch. Graphs without
+    any node pool to zeros.
 
     Args:
         x: Node features [num_nodes, num_features]
         batch: Batch indices for each node [num_nodes]
-        size: Number of graphs in the batch (avoids computing max)
+        size: Number of graphs in the batch (required under jit/vmap)
 
     Returns:
         Graph-level features [batch_size, num_features]
@@ -150,12 +187,12 @@ def global_max_pool(
     # Get batch size efficiently
     batch_size = _get_batch_size(batch, size)
 
-    # Direct use of segment_max for optimal performance
-    return segment_max(
+    pooled = segment_max(
         x,
         batch,
         num_segments=batch_size,
     )
+    return _zero_empty_segments(pooled, batch, batch_size)
 
 
 def global_min_pool(
@@ -163,14 +200,15 @@ def global_min_pool(
     batch: jnp.ndarray | None = None,
     size: int | None = None,
 ) -> jnp.ndarray:
-    """Optimized global min pooling over a batch of graphs.
+    """Global min pooling over a batch of graphs.
 
-    Computes the minimum of node features for each graph in the batch.
+    Computes the minimum of node features for each graph in the batch. Graphs without
+    any node pool to zeros.
 
     Args:
         x: Node features [num_nodes, num_features]
         batch: Batch indices for each node [num_nodes]
-        size: Number of graphs in the batch (avoids computing max)
+        size: Number of graphs in the batch (required under jit/vmap)
 
     Returns:
         Graph-level features [batch_size, num_features]
@@ -182,12 +220,12 @@ def global_min_pool(
     # Get batch size efficiently
     batch_size = _get_batch_size(batch, size)
 
-    # Direct use of segment_min for optimal performance
-    return segment_min(
+    pooled = segment_min(
         x,
         batch,
         num_segments=batch_size,
     )
+    return _zero_empty_segments(pooled, batch, batch_size)
 
 
 def global_softmax_pool(
@@ -204,15 +242,15 @@ def global_softmax_pool(
     Args:
         x: Node features [num_nodes, num_features]
         batch: Batch indices for each node [num_nodes]
-        size: Number of graphs in the batch
+        size: Number of graphs in the batch (required under jit/vmap)
         temperature: Temperature parameter for softmax
 
     Returns:
         Graph-level features [batch_size, num_features]
     """
-    # Handle single graph case
+    # Handle single graph case: attention is normalized over the nodes of the graph
     if batch is None:
-        weights = nnx.softmax(x.sum(axis=-1, keepdims=True) / temperature)
+        weights = nnx.softmax(x.sum(axis=-1) / temperature, axis=0).reshape(-1, 1)
         return (x * weights).sum(axis=0, keepdims=True)
 
     batch_size = _get_batch_size(batch, size)
@@ -260,6 +298,10 @@ def global_sort_pool(
 
     Sorts node features and selects top-k nodes per graph.
     Useful for graph classification tasks.
+
+    .. note::
+        The batched path loops over graphs in Python and masks nodes by value, so it
+        runs eagerly only.
 
     Args:
         x: Node features [num_nodes, num_features]
@@ -379,20 +421,48 @@ def batch_histogram(
     return output
 
 
-# Batched versions for vmap compatibility
+# Batched versions for vmap compatibility. The batch vector is traced by vmap, so
+# `size` is required: it is what makes the number of graphs static.
 @partial(jax.vmap, in_axes=(0, 0, None))
-def batched_global_add_pool(x, batch, size):
-    """Batched version of global_add_pool for vmap."""
+def batched_global_add_pool(x: jnp.ndarray, batch: jnp.ndarray, size: int) -> jnp.ndarray:
+    """Map :func:`global_add_pool` over a leading batch-of-graphs axis.
+
+    Args:
+        x: Node features [num_batches, num_nodes, num_features]
+        batch: Batch indices [num_batches, num_nodes]
+        size: Number of graphs per entry, required because ``batch`` is traced
+
+    Returns:
+        Graph-level features [num_batches, size, num_features]
+    """
     return global_add_pool(x, batch, size)
 
 
 @partial(jax.vmap, in_axes=(0, 0, None))
-def batched_global_mean_pool(x, batch, size):
-    """Batched version of global_mean_pool for vmap."""
+def batched_global_mean_pool(x: jnp.ndarray, batch: jnp.ndarray, size: int) -> jnp.ndarray:
+    """Map :func:`global_mean_pool` over a leading batch-of-graphs axis.
+
+    Args:
+        x: Node features [num_batches, num_nodes, num_features]
+        batch: Batch indices [num_batches, num_nodes]
+        size: Number of graphs per entry, required because ``batch`` is traced
+
+    Returns:
+        Graph-level features [num_batches, size, num_features]
+    """
     return global_mean_pool(x, batch, size)
 
 
 @partial(jax.vmap, in_axes=(0, 0, None))
-def batched_global_max_pool(x, batch, size):
-    """Batched version of global_max_pool for vmap."""
+def batched_global_max_pool(x: jnp.ndarray, batch: jnp.ndarray, size: int) -> jnp.ndarray:
+    """Map :func:`global_max_pool` over a leading batch-of-graphs axis.
+
+    Args:
+        x: Node features [num_batches, num_nodes, num_features]
+        batch: Batch indices [num_batches, num_nodes]
+        size: Number of graphs per entry, required because ``batch`` is traced
+
+    Returns:
+        Graph-level features [num_batches, size, num_features]
+    """
     return global_max_pool(x, batch, size)

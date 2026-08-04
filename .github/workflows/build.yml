@@ -2,12 +2,10 @@ name: Build, Release, and Deploy
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
   push:
@@ -19,6 +17,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit (black, isort, ruff, import placement)
+        run: pipx run pre-commit run --all-files --show-diff-on-failure
+
+  typecheck:
+    name: Type check with mypy
+    runs-on: ubuntu-latest
+    # mypy does not pass yet; this job reports without gating merges or releases.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: mypy src/
+
   build_wheel:
     name: Build universal wheel
     runs-on: ubuntu-latest
@@ -27,9 +68,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Build wheel
         run: pipx run build --wheel
@@ -54,15 +95,21 @@ jobs:
           path: dist/*.tar.gz
 
   test:
-    name: Run tests
+    name: Run tests (Python ${{ matrix.python-version }})
+    needs: lint
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -74,7 +121,7 @@ jobs:
           pytest tests/ -v
 
   upload_pypi:
-    needs: [build_wheel, build_sdist, test]
+    needs: [lint, build_wheel, build_sdist, test]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:
@@ -104,19 +151,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[docs]"
-          pip install git+https://github.com/pyg-team/pyg_sphinx_theme.git
 
       - name: Build documentation
         run: |
-          make -C docs html
+          make -C docs html SPHINXOPTS="-W --keep-going"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -125,9 +171,18 @@ jobs:
 
   deploy_docs:
     name: Deploy documentation to GitHub Pages
-    needs: build_docs
+    needs: [build_docs, test]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
 
     environment:
       name: github-pages

@@ -145,6 +145,9 @@ class SAGEConv(MessagePassing):
         """
         if isinstance(x, tuple):
             x_src, x_dst = x
+            # The aggregation buffer is sized by the target set
+            if size is None:
+                size = (x_src.shape[0], x_dst.shape[0])
         else:
             x_src = x_dst = x
 
@@ -167,7 +170,7 @@ class SAGEConv(MessagePassing):
             if self.root_weight and x_dst is not None:
                 out = out + self.lin_r(x_dst)
             elif hasattr(self, "bias") and self.bias is not None:
-                out = out + self.bias.value
+                out = out + self.bias[...]
 
         # L2 normalization
         if self.normalize:

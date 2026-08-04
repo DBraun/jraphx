@@ -201,6 +201,33 @@ def test_mlp_error_cases():
         MLP(in_features=16, num_layers=2, hidden_features=32)
 
 
+def test_mlp_unknown_norm_raises():
+    """An unrecognized normalization name is rejected instead of silently ignored."""
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32, 64], norm="layernorm", rngs=nnx.Rngs(42))
+
+    # GraphNorm is not supported by MLP, which never receives a batch vector
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32, 64], norm="graph_norm", rngs=nnx.Rngs(42))
+
+    # The check fires even when no normalization layer would be created
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32], norm="graph_norm", rngs=nnx.Rngs(42))
+
+
+def test_mlp_act_none_disables_activation():
+    """``act=None`` makes the MLP a plain composition of linear layers."""
+    x = jnp.arange(8.0).reshape(2, 4)
+
+    mlp = MLP([4, 4, 4], act=None, plain_last=False, rngs=nnx.Rngs(42))
+
+    expected = mlp.lins[1](mlp.lins[0](x))
+    assert jnp.allclose(mlp(x), expected, atol=1e-6)
+
+    relu_mlp = MLP([4, 4, 4], act=nnx.relu, plain_last=False, rngs=nnx.Rngs(42))
+    assert not jnp.allclose(relu_mlp(x), expected, atol=1e-6)
+
+
 def test_mlp_single_layer():
     """Test MLP with single layer."""
     x = jnp.ones((4, 16))

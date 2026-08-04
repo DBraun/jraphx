@@ -144,8 +144,10 @@ Dense Layers
 Functional Operations
 ~~~~~~~~~~~~~~~~~~~~~
 
+- **contains_self_loops** - Predicate for the presence of self-loops
 - **dropout** - Graph-aware dropout
 - **gumbel_softmax** - Gumbel softmax for graphs
+- **is_undirected** - Predicate for edge-index symmetry
 - **local_graph_clustering** - Local clustering
 - **pagerank** - PageRank algorithm
 - **subgraph** - Subgraph sampling

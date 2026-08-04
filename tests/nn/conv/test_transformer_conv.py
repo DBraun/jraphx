@@ -1,10 +1,12 @@
 """Test cases for JraphX TransformerConv layer converted from PyTorch Geometric tests."""
 
+import pytest
 from flax import nnx
 from jax import numpy as jnp
 from jax import random
 
 from jraphx.nn.conv import TransformerConv
+from jraphx.utils import scatter_add, scatter_softmax
 
 
 def test_transformer_conv_basic():
@@ -66,12 +68,45 @@ def test_transformer_conv_with_edge_attr():
     out_with_attr = conv(x, edge_index, edge_attr)
     assert out_with_attr.shape == (4, out_features * heads)
 
-    # Test without edge attributes
-    out_without_attr = conv(x, edge_index)
-    assert out_without_attr.shape == (4, out_features * heads)
+    # Different edge attributes must produce different outputs
+    out_other_attr = conv(x, edge_index, edge_attr * 2.0)
+    assert not jnp.allclose(out_with_attr, out_other_attr)
 
-    # Results should be different when edge attributes are used
-    assert not jnp.allclose(out_with_attr, out_without_attr)
+    # A layer built with edge_dim requires edge features
+    with pytest.raises(RuntimeError):
+        conv(x, edge_index)
+
+
+def test_transformer_conv_edge_attr_conditions_attention():
+    """Edge features enter the keys, so they reshape the attention distribution."""
+    heads, out_features, edge_dim = 2, 4, 3
+    num_nodes = 5
+    x = random.normal(random.key(1), (num_nodes, 6))
+    edge_index = jnp.array([[0, 1, 2, 3, 4, 1], [1, 1, 1, 4, 4, 4]])
+    edge_attr = random.normal(random.key(2), (edge_index.shape[1], edge_dim))
+
+    conv = TransformerConv(6, out_features, heads, edge_dim=edge_dim, rngs=nnx.Rngs(0))
+    out = conv(x, edge_index, edge_attr)
+
+    # Reference implementation of the documented operator.
+    row, col = edge_index[0], edge_index[1]
+    query, key, value = jnp.split(conv.lin_qkv(x), 3, axis=-1)
+    query_i = query[col].reshape(-1, heads, out_features)
+    key_j = key[row].reshape(-1, heads, out_features)
+    value_j = value[row].reshape(-1, heads, out_features)
+    edge_feat = conv.lin_edge(edge_attr).reshape(-1, heads, out_features)
+    alpha = ((query_i * (key_j + edge_feat)).sum(axis=-1)) / jnp.sqrt(out_features)
+    alpha = scatter_softmax(alpha, col, dim=0, dim_size=num_nodes)
+    messages = ((value_j + edge_feat) * alpha[..., None]).reshape(-1, heads * out_features)
+    expected = scatter_add(messages, col, dim_size=num_nodes) + conv.lin_skip(x)
+    expected = conv.lin_out(expected)
+
+    assert jnp.allclose(out, expected, atol=1e-5)
+
+    # If edge features only entered the values, the output would be affine in edge_attr.
+    out_zero = conv(x, edge_index, jnp.zeros_like(edge_attr))
+    out_double = conv(x, edge_index, edge_attr * 2.0)
+    assert not jnp.allclose(out_double - out_zero, 2.0 * (out - out_zero), atol=1e-4)
 
 
 def test_transformer_conv_beta_gating():

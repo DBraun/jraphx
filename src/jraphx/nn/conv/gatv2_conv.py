@@ -276,18 +276,10 @@ class GATv2Conv(MessagePassing):
         x_combined = leaky_relu(x_combined, negative_slope=self.negative_slope)
 
         # Compute attention scores
-        alpha = jnp.sum(x_combined * self.att.value, axis=-1)  # [num_edges, heads]
+        alpha = jnp.sum(x_combined * self.att[...], axis=-1)  # [num_edges, heads]
 
-        # Apply softmax using our optimized scatter_softmax
-        num_edges = alpha.shape[0]
-        alpha_flat = alpha.reshape(-1)  # [num_edges * heads]
-
-        # Create expanded index for each head
-        col_expanded = jnp.repeat(col, self.heads)
-
-        # Apply softmax
-        alpha_flat = scatter_softmax(alpha_flat, col_expanded, dim_size=num_nodes)
-        alpha = alpha_flat.reshape(num_edges, self.heads)
+        # Softmax over each target node's incoming edges, independently per head
+        alpha = scatter_softmax(alpha, col, dim_size=num_nodes)  # [num_edges, heads]
 
         # Apply dropout to attention coefficients
         if self.dropout is not None:
@@ -315,7 +307,7 @@ class GATv2Conv(MessagePassing):
 
         # Add bias
         if self.bias is not None:
-            out = out + self.bias.value
+            out = out + self.bias[...]
 
         if return_attention_weights:
             return out, (edge_index, alpha)

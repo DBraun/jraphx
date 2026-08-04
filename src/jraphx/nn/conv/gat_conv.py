@@ -257,7 +257,7 @@ class GATConv(MessagePassing):
             else:
                 # Bipartite initialization used on non-bipartite data
                 x = self.lin_dst(x) if self.lin_dst is not None else x
-            x = x.reshape(num_nodes, self.heads, self.out_features)
+            x = x.reshape(-1, self.heads, self.out_features)
             x_src = x_dst = x
 
         # Add self-loops
@@ -274,9 +274,10 @@ class GATConv(MessagePassing):
         x_j = x_src[row]  # [num_edges, heads, out_features]
 
         # Compute attention scores for each head
-        # e_{ij} = a_src^T x_i + a_dst^T x_j + (optional) a_edge^T edge_features
-        alpha_src = jnp.sum(x_i * self.att_src.value, axis=-1)  # [num_edges, heads]
-        alpha_dst = jnp.sum(x_j * self.att_dst.value, axis=-1)  # [num_edges, heads]
+        # e_{ij} = a_src^T x_j + a_dst^T x_i + (optional) a_edge^T edge_features,
+        # where a_src pairs with the source (j) features and a_dst with the target (i) features.
+        alpha_src = jnp.sum(x_j * self.att_src[...], axis=-1)  # [num_edges, heads]
+        alpha_dst = jnp.sum(x_i * self.att_dst[...], axis=-1)  # [num_edges, heads]
         alpha = alpha_src + alpha_dst  # [num_edges, heads]
 
         # Add edge feature attention if available
@@ -285,24 +286,14 @@ class GATConv(MessagePassing):
                 edge_attr = edge_attr.reshape(-1, 1)
             edge_feat = self.lin_edge(edge_attr)
             edge_feat = edge_feat.reshape(-1, self.heads, self.out_features)
-            alpha_edge = jnp.sum(edge_feat * self.att_edge.value, axis=-1)
+            alpha_edge = jnp.sum(edge_feat * self.att_edge[...], axis=-1)
             alpha = alpha + alpha_edge
 
         # Apply LeakyReLU
         alpha = jnp.where(alpha > 0, alpha, alpha * self.negative_slope)
 
-        # Compute softmax over neighbors for each node using our optimized scatter_softmax
-        # This handles different numbers of neighbors efficiently
-        # We need to flatten heads dimension for scatter_softmax
-        num_edges = alpha.shape[0]
-        alpha_flat = alpha.reshape(-1)  # [num_edges * heads]
-
-        # Create expanded index for each head
-        col_expanded = jnp.repeat(col, self.heads)
-
-        # Apply softmax
-        alpha_flat = scatter_softmax(alpha_flat, col_expanded, dim_size=num_nodes)
-        alpha = alpha_flat.reshape(num_edges, self.heads)
+        # Softmax over each target node's incoming edges, independently per head
+        alpha = scatter_softmax(alpha, col, dim_size=num_nodes)  # [num_edges, heads]
 
         # Apply dropout to attention coefficients
         if self.dropout is not None:
@@ -330,7 +321,7 @@ class GATConv(MessagePassing):
 
         # Add bias
         if self.bias is not None:
-            out = out + self.bias.value
+            out = out + self.bias[...]
 
         if return_attention_weights:
             return out, (edge_index, alpha)

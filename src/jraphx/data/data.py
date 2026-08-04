@@ -1,10 +1,38 @@
 """Data structure for representing a single graph."""
 
 import dataclasses
-from typing import Optional
 
 from flax.struct import dataclass
 from jax import numpy as jnp
+
+
+def fields_equal(first: "Data", second: "Data") -> bool:
+    """Compare two graph objects field by field.
+
+    Array fields are compared element-wise and reduced to a single boolean, so
+    two distinct objects holding equal arrays compare equal. A field is only
+    equal to ``None`` when both operands leave it unset.
+
+    ``flax.struct.dataclass`` regenerates ``__eq__`` for every subclass, so a
+    subclass that adds fields must define ``__eq__`` in its own body and
+    delegate here to keep element-wise comparison.
+
+    Args:
+        first: The left-hand operand.
+        second: The right-hand operand, of the same type as ``first``.
+
+    Returns:
+        True if every field of both objects holds the same value.
+    """
+    for field in dataclasses.fields(first):
+        mine = getattr(first, field.name)
+        theirs = getattr(second, field.name)
+        if mine is None or theirs is None:
+            if mine is not theirs:
+                return False
+        elif not bool(jnp.array_equal(mine, theirs)):
+            return False
+    return True
 
 
 @dataclass
@@ -20,7 +48,7 @@ class Data:
     ```python
     @dataclass
     class MyData(Data):
-        custom_attr: Optional[jnp.ndarray] = None
+        custom_attr: jnp.ndarray | None = None
     ```
 
     Attributes:
@@ -37,26 +65,34 @@ class Data:
         Use the replace() method to create modified instances.
     """
 
-    x: Optional[jnp.ndarray] = None
-    edge_index: Optional[jnp.ndarray] = None
-    edge_attr: Optional[jnp.ndarray] = None
-    y: Optional[jnp.ndarray] = None
-    pos: Optional[jnp.ndarray] = None
-    batch: Optional[jnp.ndarray] = None
-    ptr: Optional[jnp.ndarray] = None
+    x: jnp.ndarray | None = None
+    edge_index: jnp.ndarray | None = None
+    edge_attr: jnp.ndarray | None = None
+    y: jnp.ndarray | None = None
+    pos: jnp.ndarray | None = None
+    batch: jnp.ndarray | None = None
+    ptr: jnp.ndarray | None = None
 
     @property
     def num_nodes(self) -> int:
         """Number of nodes in the graph.
 
+        The count is taken from ``x`` or ``pos`` when available, otherwise it is
+        inferred as ``edge_index.max() + 1``, which undercounts isolated nodes
+        whose indices exceed every edge endpoint.
+
+        Returns:
+            Number of nodes as a Python integer.
+
         .. note::
-            When inferring from edge_index, this may not be JIT-compatible
-            due to dynamic shape computation.
+            The ``edge_index`` fallback reads a concrete array value and
+            therefore raises under :func:`jax.jit`. Provide ``x`` or ``pos`` if
+            the graph must be traced.
         """
         if self.x is not None:
             return self.x.shape[0]
         elif self.edge_index is not None and self.edge_index.size > 0:
-            return self.edge_index.max() + 1
+            return int(self.edge_index.max()) + 1
         elif self.pos is not None:
             return self.pos.shape[0]
         else:
@@ -113,22 +149,37 @@ class Data:
         has_reverse = jnp.isin(reverse_edges, forward_set)
 
         # If all edges have their reverse, it's undirected
-        return not jnp.all(has_reverse)
+        return not bool(jnp.all(has_reverse))
 
-    def keys(self):
-        """Return all attribute keys."""
-        # Get all field names from the dataclass
-        if dataclasses.is_dataclass(self):
-            all_fields = [f.name for f in dataclasses.fields(self)]
-        else:
-            # Fallback to known fields
-            all_fields = ["x", "edge_index", "edge_attr", "y", "pos", "batch", "ptr"]
-        # Return only non-None attributes
-        return [k for k in all_fields if getattr(self, k, None) is not None]
+    def keys(self) -> list[str]:
+        """Return the names of every attribute that carries data.
+
+        Only true dataclass fields are considered, so class-level configuration
+        declared as :class:`typing.ClassVar` on subclasses is never reported.
+
+        Returns:
+            Names of the fields whose value is not ``None``.
+        """
+        return [f.name for f in dataclasses.fields(self) if getattr(self, f.name) is not None]
 
     def __contains__(self, key: str) -> bool:
         """Return True if the attribute key is present in the data."""
         return key in self.keys()
+
+    def __eq__(self, other: object) -> bool:
+        """Compare element-wise against another graph of the same type.
+
+        Args:
+            other: Object to compare against.
+
+        Returns:
+            True if ``other`` has the same type and equal field values,
+            ``NotImplemented`` if the types differ so Python can try the
+            reflected comparison.
+        """
+        if type(self) is not type(other):
+            return NotImplemented
+        return fields_equal(self, other)
 
     def has_isolated_nodes(self) -> bool:
         """Check if the graph has isolated nodes.
@@ -165,7 +216,7 @@ class Data:
 
         # Check if any edge connects a node to itself
         src, dst = self.edge_index[0], self.edge_index[1]
-        return jnp.any(src == dst)
+        return bool(jnp.any(src == dst))
 
     def __repr__(self) -> str:
         """String representation of the Data object."""

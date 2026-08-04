@@ -4,6 +4,8 @@ Based on "Dynamic Graph CNN for Learning on Point Clouds" (Wang et al., 2019)
 https://arxiv.org/abs/1801.07829
 """
 
+from typing import Union
+
 from flax.nnx import Module
 from jax import numpy as jnp
 
@@ -58,15 +60,21 @@ class EdgeConv(MessagePassing):
         # Concatenate [x_i, x_j - x_i] and pass through network
         return self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def __call__(
+        self,
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        edge_index: jnp.ndarray,
+    ) -> jnp.ndarray:
         """Forward pass.
 
         Args:
-            x: Node features [num_nodes, in_features]
+            x: Node features [num_nodes, in_features], or a ``(x_src, x_dst)``
+                tuple for bipartite graphs
             edge_index: Edge indices [2, num_edges]
 
         Returns:
-            Updated node features [num_nodes, out_features]
+            Updated node features [num_nodes, out_features], or
+            [num_dst_nodes, out_features] for bipartite input
         """
         return self.propagate(edge_index, x)
 

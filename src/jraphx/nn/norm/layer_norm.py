@@ -1,5 +1,7 @@
+import math
 from typing import Any, Union
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.nn import initializers
@@ -16,8 +18,10 @@ class LayerNorm(nnx.Module):
         \textrm{E}[\mathbf{x}]}{\sqrt{\textrm{Var}[\mathbf{x}] + \epsilon}}
         \odot \gamma + \beta
 
-    The mean and standard-deviation are calculated across all nodes and all
-    node channels separately for each object in a mini-batch.
+    In :obj:`"node"` mode the mean and standard-deviation are calculated across
+    the node channels of each node separately. In :obj:`"graph"` mode they are
+    calculated across all nodes and all node channels separately for each object
+    in a mini-batch.
 
     Args:
         num_features (int or list): Size of each input sample, or list of
@@ -111,6 +115,7 @@ class LayerNorm(nnx.Module):
         self,
         x: jnp.ndarray,
         batch: jnp.ndarray | None = None,
+        batch_size: int | None = None,
         *,
         mask: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
@@ -118,51 +123,66 @@ class LayerNorm(nnx.Module):
 
         Args:
             x: Node features [num_nodes, *normalized_shape]
-            batch: Batch assignment vector [num_nodes] (optional)
-            mask: Binary array for masked normalization (optional)
+            batch: Batch assignment vector [num_nodes]. Only used in
+                :obj:`"graph"` mode; if :obj:`None`, all nodes are treated as
+                belonging to a single graph.
+            batch_size: Number of graphs in the mini-batch. Must be supplied as
+                a Python :obj:`int` when :obj:`"graph"` mode is traced by
+                :obj:`jax.jit`/:obj:`nnx.jit`, since the number of segments is a
+                static quantity. When omitted it is derived from ``batch``,
+                which forces a host synchronization and therefore only works
+                outside of a trace.
+            mask: Binary array for masked normalization. Accepted for API
+                symmetry and currently unused, since masking interacts with the
+                feature axes that layer normalization reduces over.
 
         Returns:
             Normalized features [num_nodes, *normalized_shape]
+
+        Raises:
+            ValueError: If ``mode`` is neither :obj:`"node"` nor :obj:`"graph"`.
         """
         if self.mode == "node":
-            # Standard layer norm per node
-            # Note: mask support for layer norm is complex as it affects feature dimensions
-            # For now, we keep the standard behavior and ignore mask
+            # Standard layer norm per node, reducing over the feature axis only.
             mean = x.mean(axis=-1, keepdims=True)
             var = x.var(axis=-1, keepdims=True)
 
-        elif self.mode == "graph" and batch is not None:
-            # Normalize within each graph
-            batch_size = int(batch.max()) + 1
-            out = jnp.zeros_like(x)
+        elif self.mode == "graph":
+            # Reduce over both the node axis and every feature axis, separately
+            # for each graph in the mini-batch.
+            if batch is None:
+                batch = jnp.zeros(x.shape[0], dtype=jnp.int32)
+                batch_size = 1
+            elif batch_size is None:
+                batch_size = int(batch.max()) + 1
 
-            for b in range(batch_size):
-                mask = batch == b
-                graph_x = x[mask]
+            feature_axes = tuple(range(1, x.ndim))
+            num_features = math.prod(x.shape[1:])
+            broadcast_shape = (-1,) + (1,) * (x.ndim - 1)
 
-                if graph_x.shape[0] > 0:
-                    # Compute statistics for this graph
-                    # Note: mask support for graph mode layer norm is complex
-                    # For now, we keep standard behavior
-                    mean = graph_x.mean(axis=-1, keepdims=True)
-                    var = graph_x.var(axis=-1, keepdims=True)
+            counts = jax.ops.segment_sum(
+                jnp.ones(batch.shape[0], dtype=x.dtype), batch, num_segments=batch_size
+            )
+            # Elements per graph; empty graphs are clamped to avoid a 0/0 mean.
+            denom = jnp.maximum(counts, 1.0) * num_features
 
-                    # Normalize
-                    graph_x_norm = (graph_x - mean) / jnp.sqrt(var + self.eps)
+            graph_mean = (
+                jax.ops.segment_sum(x.sum(axis=feature_axes), batch, num_segments=batch_size)
+                / denom
+            )
+            mean = graph_mean[batch].reshape(broadcast_shape)
 
-                    # Apply affine transformation
-                    if self.elementwise_affine:
-                        graph_x_norm = self.weight.value * graph_x_norm + self.bias.value
-
-                    # Store result
-                    out = out.at[mask].set(graph_x_norm)
-
-            return out
+            centered = x - mean
+            graph_var = (
+                jax.ops.segment_sum(
+                    (centered**2).sum(axis=feature_axes), batch, num_segments=batch_size
+                )
+                / denom
+            )
+            var = graph_var[batch].reshape(broadcast_shape)
 
         else:
-            # Fallback to node-wise normalization
-            mean = x.mean(axis=-1, keepdims=True)
-            var = x.var(axis=-1, keepdims=True)
+            raise ValueError(f"Unknown LayerNorm mode '{self.mode}' (expected 'node' or 'graph')")
 
         # Normalize
         x_norm = (x - mean) / jnp.sqrt(var + self.eps)
@@ -170,9 +190,9 @@ class LayerNorm(nnx.Module):
         # Apply affine transformation
         if self.elementwise_affine:
             if self.weight is not None:
-                x_norm = self.weight.value * x_norm
+                x_norm = self.weight[...] * x_norm
             if self.bias is not None:
-                x_norm = x_norm + self.bias.value
+                x_norm = x_norm + self.bias[...]
 
         # Apply dtype conversion if specified
         if self.dtype is not None:

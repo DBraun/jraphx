@@ -12,10 +12,10 @@ Scatter Operations
 
 The scatter module provides efficient implementations of scatter operations for aggregating node features.
 
-scatter_sum
+scatter_add
 ~~~~~~~~~~~
 
-.. autofunction:: scatter_sum
+.. autofunction:: scatter_add
 
    Scatter sum operation for aggregating values by index.
 
@@ -23,14 +23,14 @@ scatter_sum
 
    .. code-block:: python
 
-      from jraphx.utils.scatter import scatter_sum
+      from jraphx.utils.scatter import scatter_add
       import jax.numpy as jnp
 
       src = jnp.array([1.0, 2.0, 3.0, 4.0])
       index = jnp.array([0, 0, 1, 1])
 
       # Sum values by index
-      out = scatter_sum(src, index, dim_size=2)
+      out = scatter_add(src, index, dim_size=2)
       # Result: [3.0, 7.0]
 
 scatter_mean
@@ -178,20 +178,6 @@ remove_self_loops
 .. autofunction:: remove_self_loops
 
    Remove self-loop edges from a graph.
-
-contains_self_loops
-~~~~~~~~~~~~~~~~~~~
-
-.. autofunction:: contains_self_loops
-
-   Check if a graph contains self-loop edges.
-
-is_undirected
-~~~~~~~~~~~~~
-
-.. autofunction:: is_undirected
-
-   Check if a graph is undirected.
 
 coalesce
 ~~~~~~~~

@@ -111,9 +111,9 @@ class BatchNorm(nnx.Module):
 
         # Running statistics
         if track_running_stats:
-            self.running_mean = nnx.Variable(jnp.zeros(num_features))
-            self.running_var = nnx.Variable(jnp.ones(num_features))
-            self.num_batches_tracked = nnx.Variable(jnp.array(0, dtype=jnp.int32))
+            self.running_mean = nnx.BatchStat(jnp.zeros(num_features))
+            self.running_var = nnx.BatchStat(jnp.ones(num_features))
+            self.num_batches_tracked = nnx.BatchStat(jnp.array(0, dtype=jnp.int32))
         else:
             self.running_mean = nnx.data(None)
             self.running_var = nnx.data(None)
@@ -131,7 +131,12 @@ class BatchNorm(nnx.Module):
 
         Args:
             x: Node features [num_nodes, num_features]
-            batch: Batch assignment vector [num_nodes] (optional)
+            batch: Batch assignment vector [num_nodes]. Accepted for API
+                symmetry with :class:`~jraphx.nn.norm.GraphNorm` and
+                :class:`~jraphx.nn.norm.LayerNorm`, and deliberately ignored:
+                batch normalization pools statistics over every node of the
+                mini-batch regardless of graph membership. Use
+                :class:`~jraphx.nn.norm.GraphNorm` for per-graph statistics.
             use_running_average: If True, use running statistics. If False, compute
                 batch statistics. If None, determined by training state.
             mask: Binary array for masked normalization (optional)
@@ -148,53 +153,33 @@ class BatchNorm(nnx.Module):
         )
 
         if not use_running_average:
-            # Compute batch statistics
-            if batch is not None:
-                # Compute per-batch statistics and average them
-                batch_size = int(batch.max()) + 1
-                mean = jnp.zeros((batch_size, self.num_features))
-                var = jnp.zeros((batch_size, self.num_features))
-
-                for b in range(batch_size):
-                    batch_mask = batch == b
-                    batch_x = x[batch_mask]
-                    if batch_x.shape[0] > 0:
-                        if mask is not None:
-                            node_mask = mask[batch_mask]
-                            mean = mean.at[b].set(jnp.average(batch_x, axis=0, weights=node_mask))
-                            var = var.at[b].set(
-                                jnp.average((batch_x - mean[b]) ** 2, axis=0, weights=node_mask)
-                            )
-                        else:
-                            mean = mean.at[b].set(batch_x.mean(axis=0))
-                            var = var.at[b].set(batch_x.var(axis=0))
-
-                # Average across batches
-                mean = mean.mean(axis=0)
-                var = var.mean(axis=0)
+            # Statistics pooled over all nodes of the mini-batch
+            if mask is not None:
+                mean = jnp.average(x, axis=0, weights=mask)
+                var = jnp.average((x - mean) ** 2, axis=0, weights=mask)
+                count = jnp.sum(mask).astype(var.dtype)
             else:
-                # Global statistics across all nodes
-                if mask is not None:
-                    mean = jnp.average(x, axis=0, weights=mask)
-                    var = jnp.average((x - mean) ** 2, axis=0, weights=mask)
-                else:
-                    mean = x.mean(axis=0)
-                    var = x.var(axis=0)
+                mean = x.mean(axis=0)
+                var = x.var(axis=0)
+                count = jnp.asarray(x.shape[0], dtype=var.dtype)
 
             # Update running statistics
             if self.track_running_stats:
-                self.running_mean.value = (
-                    self.momentum * self.running_mean.value + (1 - self.momentum) * mean
+                # Running variance tracks the unbiased estimator, matching
+                # PyTorch/PyG, while normalization uses the biased one.
+                unbiased_var = var * count / jnp.maximum(count - 1.0, 1.0)
+                self.running_mean[...] = (
+                    self.momentum * self.running_mean[...] + (1 - self.momentum) * mean
                 )
-                self.running_var.value = (
-                    self.momentum * self.running_var.value + (1 - self.momentum) * var
+                self.running_var[...] = (
+                    self.momentum * self.running_var[...] + (1 - self.momentum) * unbiased_var
                 )
-                self.num_batches_tracked.value += 1
+                self.num_batches_tracked[...] += 1
         else:
             # Use running statistics
             if self.track_running_stats:
-                mean = self.running_mean.value
-                var = self.running_var.value
+                mean = self.running_mean[...]
+                var = self.running_var[...]
             else:
                 # Fallback to batch statistics
                 if mask is not None:
@@ -210,9 +195,9 @@ class BatchNorm(nnx.Module):
         # Scale and shift
         out = x_norm
         if self.weight is not None:
-            out = self.weight.value * out
+            out = self.weight[...] * out
         if self.bias is not None:
-            out = out + self.bias.value
+            out = out + self.bias[...]
 
         # Apply dtype conversion if specified
         if self.dtype is not None:

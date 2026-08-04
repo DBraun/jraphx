@@ -9,10 +9,9 @@ from functools import partial
 import jax
 from jax import numpy as jnp
 
-from .scatter import scatter_add, scatter_logsumexp, scatter_max
+from .scatter import _resolve_dim_size, scatter_add, scatter_logsumexp, scatter_max
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_softmax(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -28,10 +27,14 @@ def scatter_softmax(
     This is commonly used in attention mechanisms where we need to
     normalize attention scores over neighboring nodes.
 
+    Groups whose entries are all :obj:`-inf` (the masked-attention idiom)
+    produce zeros rather than NaN.
+
     Args:
         src: Source tensor with values to apply softmax to
         index: Indices determining which group each value belongs to
-        dim_size: Number of groups (inferred if None)
+        dim_size: Number of groups, inferred from ``index`` if :obj:`None`
+            (which requires a concrete ``index``)
         dim: Dimension along which to scatter (default: -2)
         temperature: Temperature parameter for softmax scaling
 
@@ -45,13 +48,33 @@ def scatter_softmax(
         # Group 0: softmax([1.0, 2.0]) = [0.27, 0.73]
         # Group 1: softmax([3.0, 1.5]) = [0.82, 0.18]
     """
+    return _scatter_softmax(src, index, _resolve_dim_size(index, dim_size), dim, temperature)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim"))
+def _scatter_softmax(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+    temperature: float,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_softmax` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor with values to apply softmax to
+        index: Indices determining which group each value belongs to
+        dim_size: Number of groups
+        dim: Dimension along which to scatter
+        temperature: Temperature parameter for softmax scaling
+
+    Returns:
+        Tensor with softmax applied within each group
+    """
     if dim == -2:
         dim = 0
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
-
-    if dim_size is None:
-        dim_size = index.max() + 1
 
     # Apply temperature scaling
     src = src / temperature
@@ -59,8 +82,9 @@ def scatter_softmax(
     # For numerical stability, subtract the max value per group
     max_vals = scatter_max(src, index, dim_size, dim)
 
-    # Handle empty groups (where max is -inf)
-    max_vals = jnp.where(jnp.isfinite(max_vals), max_vals, 0.0)
+    # A fully masked group has a max of -inf; shifting it by zero instead keeps
+    # the exponentials finite and drives the group's output to zero.
+    max_vals = jnp.where(jnp.isneginf(max_vals), jnp.zeros((), max_vals.dtype), max_vals)
 
     # Subtract max from each element in its group
     src_shifted = src - max_vals[index]
@@ -71,8 +95,8 @@ def scatter_softmax(
     # Sum exp values per group
     sum_exp = scatter_add(exp_vals, index, dim_size, dim)
 
-    # Avoid division by zero for empty groups
-    sum_exp = jnp.maximum(sum_exp, 1e-10)
+    # Empty and fully masked groups carry no mass; avoid dividing zero by zero
+    sum_exp = jnp.where(sum_exp > 0, sum_exp, jnp.ones((), sum_exp.dtype))
 
     # Normalize: divide each exp value by its group's sum
     softmax_vals = exp_vals / sum_exp[index]
@@ -80,7 +104,6 @@ def scatter_softmax(
     return softmax_vals
 
 
-@partial(jax.jit, static_argnames=("dim_size", "dim"))
 def scatter_log_softmax(
     src: jnp.ndarray,
     index: jnp.ndarray,
@@ -99,7 +122,8 @@ def scatter_log_softmax(
     Args:
         src: Source tensor with values to apply log-softmax to
         index: Indices determining which group each value belongs to
-        dim_size: Number of groups (inferred if None)
+        dim_size: Number of groups, inferred from ``index`` if :obj:`None`
+            (which requires a concrete ``index``)
         dim: Dimension along which to scatter (default: -2)
         temperature: Temperature parameter for softmax scaling
 
@@ -113,22 +137,39 @@ def scatter_log_softmax(
         # Group 0: log_softmax([1.0, 2.0])
         # Group 1: log_softmax([3.0, 1.5])
     """
+    return _scatter_log_softmax(src, index, _resolve_dim_size(index, dim_size), dim, temperature)
+
+
+@partial(jax.jit, static_argnames=("dim_size", "dim"))
+def _scatter_log_softmax(
+    src: jnp.ndarray,
+    index: jnp.ndarray,
+    dim_size: int,
+    dim: int,
+    temperature: float,
+) -> jnp.ndarray:
+    """Jitted core of :func:`scatter_log_softmax` with a static ``dim_size``.
+
+    Args:
+        src: Source tensor with values to apply log-softmax to
+        index: Indices determining which group each value belongs to
+        dim_size: Number of groups
+        dim: Dimension along which to scatter
+        temperature: Temperature parameter for softmax scaling
+
+    Returns:
+        Tensor with log-softmax applied within each group
+    """
     if dim == -2:
         dim = 0
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
-
-    if dim_size is None:
-        dim_size = index.max() + 1
 
     # Apply temperature scaling
     src = src / temperature
 
     # Use logsumexp for numerical stability
     logsumexp_vals = scatter_logsumexp(src, index, dim_size, dim)
-
-    # Handle empty groups
-    logsumexp_vals = jnp.where(jnp.isfinite(logsumexp_vals), logsumexp_vals, 0.0)
 
     # log_softmax = x - logsumexp(x)
     log_softmax_vals = src - logsumexp_vals[index]
@@ -154,7 +195,8 @@ def masked_scatter_softmax(
         src: Source tensor with values to apply softmax to
         index: Indices determining which group each value belongs to
         mask: Boolean mask, True for values to include (shape matching src)
-        dim_size: Number of groups (inferred if None)
+        dim_size: Number of groups, inferred from ``index`` if :obj:`None`
+            (which requires a concrete ``index``)
         dim: Dimension along which to scatter (default: -2)
         temperature: Temperature parameter for softmax scaling
 

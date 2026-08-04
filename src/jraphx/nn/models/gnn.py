@@ -25,7 +25,7 @@ class GCN(BasicGNN):
         dropout_rate: Dropout probability
         act: Activation function
         act_first: If True, apply activation before normalization
-        norm: Normalization type ('batch_norm', 'layer_norm', None)
+        norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
         residual: Whether to use residual connections
         improved: Use improved GCN normalization
@@ -34,6 +34,9 @@ class GCN(BasicGNN):
         normalize: Apply symmetric normalization
         rngs: Random number generators
     """
+
+    supports_edge_weight: bool = True
+    supports_edge_attr: bool = False
 
     def init_conv(
         self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
@@ -76,12 +79,15 @@ class GAT(BasicGNN):
         dropout_rate: Dropout probability
         act: Activation function
         act_first: If True, apply activation before normalization
-        norm: Normalization type ('batch_norm', 'layer_norm', None)
+        norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
         residual: Whether to use residual connections
         edge_dim: Edge feature dimension
         rngs: Random number generators
     """
+
+    supports_edge_weight: bool = False
+    supports_edge_attr: bool = True
 
     def __init__(
         self,
@@ -174,12 +180,15 @@ class GraphSAGE(BasicGNN):
         dropout_rate: Dropout probability
         act: Activation function
         act_first: If True, apply activation before normalization
-        norm: Normalization type ('batch_norm', 'layer_norm', None)
+        norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
         residual: Whether to use residual connections
         normalize: Whether to L2-normalize output features
         rngs: Random number generators
     """
+
+    supports_edge_weight: bool = False
+    supports_edge_attr: bool = False
 
     def init_conv(
         self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
@@ -215,12 +224,18 @@ class GIN(BasicGNN):
         dropout_rate: Dropout probability
         act: Activation function
         act_first: If True, apply activation before normalization
-        norm: Normalization type ('batch_norm', 'layer_norm', None)
+        norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None).
+            'graph_norm' is applied between GIN blocks; the MLP inside each
+            GINConv uses 'layer_norm' instead, because GINConv does not plumb a
+            batch vector into its MLP.
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
         residual: Whether to use residual connections
         train_eps: Whether to learn the epsilon parameter
         rngs: Random number generators
     """
+
+    supports_edge_weight: bool = False
+    supports_edge_attr: bool = False
 
     def init_conv(
         self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
@@ -229,13 +244,20 @@ class GIN(BasicGNN):
         # Extract GIN-specific parameters
         train_eps = kwargs.pop("train_eps", False)
 
-        # Create MLP for GINConv
+        # GINConv calls its MLP without a batch vector, so GraphNorm would pool
+        # statistics over the whole disjoint union; use per-node LayerNorm there
+        # and let GraphNorm act between the GIN blocks.
+        if self.norm_type == "graph_norm":
+            mlp_norm = "layer_norm"
+        else:
+            mlp_norm = self.norm_type
+
+        # Create MLP for GINConv. Dropout is applied once per block by BasicGNN.
         mlp = MLP(
             feature_list=[in_features, out_features, out_features],
             act=self.act,
             act_first=self.act_first,
-            norm=self.norm_type,
-            dropout_rate=self.dropout_rate,
+            norm=mlp_norm,
             rngs=rngs,
         )
 

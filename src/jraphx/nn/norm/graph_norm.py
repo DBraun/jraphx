@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -16,11 +17,16 @@ class GraphNorm(nnx.Module):
     where :math:`\alpha` denotes parameters that learn how much information
     to keep in the mean.
 
+    The mean and standard-deviation are computed per feature channel over the
+    nodes of each individual graph in the mini-batch.
+
     Args:
         num_features (int): Size of each input sample.
         eps (float, optional): A value added to the denominator for numerical
             stability. (default: :obj:`1e-5`)
-        rngs: Random number generators for initialization.
+        rngs: Random number generators for initialization. Accepted for API
+            symmetry with the other normalization layers; the parameters use
+            constant initializers and consume no randomness.
     """
 
     def __init__(
@@ -32,62 +38,48 @@ class GraphNorm(nnx.Module):
         self.num_features = num_features
         self.eps = eps
 
-        if rngs is None:
-            rngs = nnx.Rngs(0)
-
         # Learnable parameters
         self.weight = nnx.Param(jnp.ones(num_features))
         self.bias = nnx.Param(jnp.zeros(num_features))
+        self.mean_scale = nnx.Param(jnp.ones(num_features))
 
     def __call__(
         self,
         x: jnp.ndarray,
         batch: jnp.ndarray | None = None,
+        batch_size: int | None = None,
     ) -> jnp.ndarray:
         """Apply graph normalization.
 
         Args:
             x: Node features [num_nodes, num_features]
-            batch: Batch assignment vector [num_nodes] (optional)
+            batch: Batch assignment vector [num_nodes]. If :obj:`None`, all
+                nodes are treated as belonging to a single graph.
+            batch_size: Number of graphs in the mini-batch. Must be supplied as
+                a Python :obj:`int` when this layer is traced by
+                :obj:`jax.jit`/:obj:`nnx.jit`, since the number of segments is a
+                static quantity. When omitted it is derived from ``batch``,
+                which forces a host synchronization and therefore only works
+                outside of a trace.
 
         Returns:
             Normalized features [num_nodes, num_features]
         """
         if batch is None:
-            # Single graph case
-            # Compute mean across all nodes and features
-            mean = x.mean()
-            # Subtract mean
-            x = x - mean
-            # Compute variance across all dimensions
-            var = (x**2).mean()
-            # Normalize
-            x_norm = x / jnp.sqrt(var + self.eps)
-
-        else:
-            # Batched graph case
+            batch = jnp.zeros(x.shape[0], dtype=jnp.int32)
+            batch_size = 1
+        elif batch_size is None:
             batch_size = int(batch.max()) + 1
-            x_norm = jnp.zeros_like(x)
 
-            for b in range(batch_size):
-                mask = batch == b
-                graph_x = x[mask]
+        # Node counts per graph; empty graphs are clamped to avoid a 0/0 mean.
+        counts = jax.ops.segment_sum(
+            jnp.ones(batch.shape[0], dtype=x.dtype), batch, num_segments=batch_size
+        )
+        counts = jnp.maximum(counts, 1.0)[:, None]
 
-                if graph_x.shape[0] > 0:
-                    # Compute mean across all nodes and features in this graph
-                    mean = graph_x.mean()
-                    # Subtract mean
-                    graph_x = graph_x - mean
-                    # Compute variance
-                    var = (graph_x**2).mean()
-                    # Normalize
-                    graph_x = graph_x / jnp.sqrt(var + self.eps)
-                    # Store result
-                    x_norm = x_norm.at[mask].set(graph_x)
+        mean = jax.ops.segment_sum(x, batch, num_segments=batch_size) / counts
+        out = x - self.mean_scale[...] * mean[batch]
+        var = jax.ops.segment_sum(out**2, batch, num_segments=batch_size) / counts
+        std = jnp.sqrt(var[batch] + self.eps)
 
-            x_norm = x_norm
-
-        # Apply learnable scale and shift
-        out = self.weight.value * x_norm + self.bias.value
-
-        return out
+        return self.weight[...] * out / std + self.bias[...]

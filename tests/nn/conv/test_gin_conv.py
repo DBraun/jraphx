@@ -50,6 +50,23 @@ def test_gin_conv_bipartite():
     assert out.shape == (6, 32)
 
 
+def test_gin_conv_bipartite_tuple():
+    """GIN accepts a (x_src, x_dst) pair and roots the update on the target set."""
+    x_src = jnp.array([[10.0], [20.0], [30.0]])
+    x_dst = jnp.array([[1.0], [2.0]])
+    edge_index = jnp.array([[0, 1, 2], [0, 1, 1]])
+
+    nn = nnx.Linear(1, 1, use_bias=False, rngs=nnx.Rngs(0))
+    nn.kernel[...] = jnp.ones((1, 1))
+    conv = GINConv(nn, eps=0.5)
+
+    out = conv((x_src, x_dst), edge_index)
+
+    # Aggregate is [10, 20 + 30]; the root term is 1.5 * x_dst.
+    assert out.shape == (2, 1)
+    assert jnp.allclose(out, jnp.array([[11.5], [53.0]]))
+
+
 def test_gin_conv_eps_parameter():
     """Test GIN with different epsilon configurations."""
     x = random.normal(random.key(42), (4, 16))
@@ -67,8 +84,9 @@ def test_gin_conv_eps_parameter():
     out2 = conv2(x, edge_index)
     assert out2.shape == (4, 32)
 
-    # Check that eps is trainable in second case
-    assert hasattr(conv2.eps, "value")  # It's a Param
+    # eps is a Param only when train_eps=True, so only then does it receive gradients
+    assert isinstance(conv2.eps, nnx.Param)
+    assert not isinstance(conv1.eps, nnx.Param)
 
     # Outputs should be different due to different network initializations
     # Use different seeds to ensure different outputs

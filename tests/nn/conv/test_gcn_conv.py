@@ -1,5 +1,6 @@
 """Test cases for JraphX GCNConv layer converted from PyTorch Geometric tests."""
 
+import jax
 import pytest
 from flax import nnx
 from jax import numpy as jnp
@@ -59,7 +60,13 @@ def test_gcn_conv_parameters():
 
     # Test without bias
     conv_no_bias = GCNConv(8, 16, bias=False, rngs=nnx.Rngs(0))
-    assert conv_no_bias.linear.use_bias is False
+    assert conv_no_bias.bias is None
+
+    # The bias lives outside the linear layer so that it is not aggregated
+    conv_bias = GCNConv(8, 16, bias=True, rngs=nnx.Rngs(0))
+    assert conv_bias.linear.use_bias is False
+    assert conv_bias.bias[...].shape == (16,)
+    assert jnp.allclose(conv_bias.bias[...], jnp.zeros(16))
 
     # Test without normalization
     conv_no_norm = GCNConv(8, 16, normalize=False, add_self_loops=False, rngs=nnx.Rngs(0))
@@ -162,6 +169,238 @@ def test_gcn_conv_batch_processing():
 
     out = conv(x, edge_index)
     assert out.shape == (5, 8)
+
+
+def test_gcn_norm_uses_weighted_degree():
+    """Normalization must divide by the weighted degree, matching PyG."""
+    conv = GCNConv(3, 3, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    edge_weight = jnp.array([2.0, 2.0, 0.5, 0.5, 3.0])
+
+    out_index, out_weight = conv.gcn_norm(
+        edge_index=edge_index,
+        edge_weight=edge_weight,
+        num_nodes=4,
+    )
+
+    # Self-loops appended for all four nodes
+    assert out_index.shape == (2, 9)
+
+    # Weighted in-degrees (including unit self-loops): [6, 3.5, 1.5, 1]
+    deg = jnp.array([6.0, 3.5, 1.5, 1.0])
+    deg_inv_sqrt = deg ** (-0.5)
+    weights = jnp.concatenate([edge_weight, jnp.ones(4)])
+    expected = deg_inv_sqrt[out_index[0]] * weights * deg_inv_sqrt[out_index[1]]
+
+    assert jnp.allclose(out_weight, expected, atol=1e-6)
+    # Pinned against torch_geometric's gcn_norm for the same inputs
+    assert jnp.allclose(
+        out_weight,
+        jnp.array(
+            [0.436436, 0.436436, 0.218218, 0.218218, 1.224745, 0.166667, 0.285714, 0.666667, 1.0]
+        ),
+        atol=1e-5,
+    )
+
+
+def test_gcn_norm_improved_fill_value_enters_degree():
+    """With improved=True the fill value of 2.0 must also count in the degree."""
+    conv = GCNConv(3, 3, improved=True, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+
+    out_index, out_weight = conv.gcn_norm(
+        edge_index=edge_index,
+        num_nodes=4,
+        improved=True,
+    )
+
+    assert jnp.allclose(
+        out_weight,
+        jnp.array([0.25, 0.25, 0.288675, 0.288675, 0.353553, 0.5, 0.5, 0.666667, 1.0]),
+        atol=1e-5,
+    )
+
+    # Node 3 only has its own self-loop, so its coefficient is exactly 1.0
+    assert float(out_weight[-1]) == pytest.approx(1.0, abs=1e-6)
+
+    # No coefficient may exceed 1 for a proper normalization
+    assert bool(jnp.all(out_weight <= 1.0 + 1e-6))
+
+
+def test_gcn_norm_isolated_node_gets_zero_weight():
+    """A node with a non-positive weighted degree receives zero normalization."""
+    conv = GCNConv(3, 3, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0], [1]])
+    edge_weight = jnp.array([1.0])
+
+    _, out_weight = conv.gcn_norm(
+        edge_index=edge_index,
+        edge_weight=edge_weight,
+        num_nodes=3,
+        add_self_loops=False,
+    )
+
+    # Node 0 has zero in-degree, so the single edge is scaled to zero
+    assert jnp.allclose(out_weight, jnp.zeros(1))
+
+
+def test_gcn_conv_bias_is_constant_offset():
+    """The bias must be a per-row constant, not scaled by the aggregation."""
+    x = random.normal(random.key(0), (4, 3))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+
+    conv = GCNConv(3, 2, rngs=nnx.Rngs(0))
+    out_zero_bias = conv(x, edge_index)
+
+    bias = jnp.array([5.0, -3.0])
+    conv.bias[...] = bias
+    out_bias = conv(x, edge_index)
+
+    delta = out_bias - out_zero_bias
+    expected = jnp.broadcast_to(bias, delta.shape)
+    assert jnp.allclose(delta, expected, atol=1e-5)
+
+
+def test_gcn_conv_bias_constant_without_normalization():
+    """The bias offset stays constant on the unweighted propagate path too."""
+    x = random.normal(random.key(1), (4, 3))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+
+    conv = GCNConv(3, 2, normalize=False, add_self_loops=False, rngs=nnx.Rngs(0))
+    out_zero_bias = conv(x, edge_index)
+
+    bias = jnp.array([5.0, -3.0])
+    conv.bias[...] = bias
+    out_bias = conv(x, edge_index)
+
+    assert jnp.allclose(out_bias - out_zero_bias, jnp.broadcast_to(bias, (4, 2)), atol=1e-5)
+
+
+def test_gcn_conv_no_bias_has_no_offset():
+    """With bias=False the layer adds nothing after aggregation."""
+    x = random.normal(random.key(2), (4, 3))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+
+    conv = GCNConv(3, 2, bias=False, rngs=nnx.Rngs(0))
+    out = conv(x, edge_index)
+
+    assert conv.bias is None
+    assert out.shape == (4, 2)
+
+
+def test_gcn_conv_cached_requires_precompute():
+    """A cached layer refuses to run before its cache has been filled."""
+    x = jnp.ones((4, 4))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    conv = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+
+    with pytest.raises(RuntimeError, match="normalization cache is empty"):
+        conv(x, edge_index)
+
+
+def test_precompute_norm_requires_cached():
+    """precompute_norm is meaningless without cached=True."""
+    conv = GCNConv(4, 4, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1], [1, 0]])
+
+    with pytest.raises(ValueError, match="requires 'cached=True'"):
+        conv.precompute_norm(edge_index, num_nodes=2)
+
+
+def test_gcn_conv_cached_matches_uncached():
+    """A precomputed cache yields exactly the uncached result."""
+    x = random.normal(random.key(3), (4, 4))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    edge_weight = jnp.array([2.0, 2.0, 0.5, 0.5, 3.0])
+
+    conv_cached = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+    conv_plain = GCNConv(4, 4, cached=False, rngs=nnx.Rngs(0))
+
+    conv_cached.precompute_norm(edge_index, edge_weight, num_nodes=4, dtype=x.dtype)
+
+    out_cached = conv_cached(x, edge_index, edge_weight)
+    out_plain = conv_plain(x, edge_index, edge_weight)
+
+    assert jnp.allclose(out_cached, out_plain, atol=1e-6)
+
+    # Repeated eager calls reuse the same cache entry
+    assert jnp.allclose(conv_cached(x, edge_index, edge_weight), out_cached)
+
+
+def test_gcn_conv_cached_normalizes_only_once():
+    """gcn_norm runs once during precompute and never during forward passes."""
+    x = jnp.ones((4, 4))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    conv = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+
+    calls = []
+    original_gcn_norm = conv.gcn_norm
+
+    def counting_gcn_norm(*args, **kwargs):
+        calls.append(1)
+        return original_gcn_norm(*args, **kwargs)
+
+    conv.gcn_norm = counting_gcn_norm
+    conv.precompute_norm(edge_index, num_nodes=4, dtype=x.dtype)
+    assert len(calls) == 1
+
+    for _ in range(3):
+        conv(x, edge_index)
+    assert len(calls) == 1
+
+
+def test_gcn_conv_cached_under_nnx_jit():
+    """A precomputed cached layer survives repeated jitted calls."""
+    x = jnp.ones((4, 4))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    conv = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+    conv.precompute_norm(edge_index, num_nodes=4, dtype=x.dtype)
+
+    jitted = nnx.jit(lambda m, x, ei: m(x, ei))
+
+    outs = [jitted(conv, x, edge_index) for _ in range(3)]
+    for out in outs:
+        assert out.shape == (4, 4)
+        assert jnp.allclose(out, outs[0])
+    assert jnp.allclose(outs[0], conv(x, edge_index), atol=1e-6)
+
+
+def test_gcn_conv_cached_under_jax_jit():
+    """A precomputed cached layer also works under a plain jax.jit closure."""
+    x = jnp.ones((4, 4))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    conv = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+    conv.precompute_norm(edge_index, num_nodes=4, dtype=x.dtype)
+
+    jitted = jax.jit(lambda x, ei: conv(x, ei))
+
+    out1 = jitted(x, edge_index)
+    out2 = jitted(x, edge_index)
+    assert jnp.allclose(out1, out2)
+    assert jnp.allclose(out1, conv(x, edge_index), atol=1e-6)
+
+
+def test_gcn_conv_cached_rejects_size_change():
+    """Feeding a differently sized graph to a cached layer raises."""
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    conv = GCNConv(4, 4, cached=True, rngs=nnx.Rngs(0))
+    conv.precompute_norm(edge_index, num_nodes=4)
+
+    with pytest.raises(RuntimeError, match="cached a normalization for 4 nodes"):
+        conv(jnp.ones((5, 4)), edge_index)
+
+    conv.reset_cache()
+    with pytest.raises(RuntimeError, match="normalization cache is empty"):
+        conv(jnp.ones((4, 4)), edge_index)
+
+
+def test_gcn_conv_cached_dtype_follows_precompute():
+    """The cached normalization keeps the dtype requested at precompute time."""
+    edge_index = jnp.array([[0, 1], [1, 0]])
+    conv = GCNConv(3, 3, cached=True, rngs=nnx.Rngs(0))
+    conv.precompute_norm(edge_index, num_nodes=2, dtype=jnp.bfloat16)
+
+    assert conv._cached_edge_weight.get_value().dtype == jnp.bfloat16
 
 
 # TODO: The following PyG GCN test features are not implemented in JraphX:

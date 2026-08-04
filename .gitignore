@@ -174,8 +174,10 @@ Desktop.ini
 # cibuildwheel
 wheelhouse/
 
-# Data directories (for downloaded datasets)
-data/
+# Downloaded datasets, anchored to the repository root. An unanchored `data/`
+# would also match src/jraphx/data/ and tests/data/, hiding them from git and
+# from every tool that honours .gitignore (ruff, black, isort, pre-commit).
+/data/
 
 # claude/codex
 *.local

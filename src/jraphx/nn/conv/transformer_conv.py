@@ -153,12 +153,14 @@ class TransformerConv(MessagePassing):
         Args:
             x: Node features [num_nodes, in_features]
             edge_index: Edge indices [2, num_edges]
-            edge_attr: Edge features [num_edges, edge_dim] (optional)
-            key: Random key for dropout
+            edge_attr: Edge features [num_edges, edge_dim], required if ``edge_dim`` was set
 
         Returns:
             Updated node features [num_nodes, out_features * heads] if concat
             else [num_nodes, out_features]
+
+        Raises:
+            RuntimeError: If the layer was built with ``edge_dim`` but ``edge_attr`` is None.
         """
         H, C = self.heads, self.out_features
 
@@ -244,14 +246,16 @@ class TransformerConv(MessagePassing):
             query_i: Query features of target nodes [E, H*C]
             key_j: Key features of source nodes [E, H*C]
             value_j: Value features of source nodes [E, H*C]
-            edge_attr: Edge features [E, edge_dim]
+            edge_attr: Edge features [E, edge_dim], required if ``edge_dim`` was set
             index: Target node indices for edges [E]
             ptr: Batch pointers (unused)
             size_i: Number of target nodes
-            key_dropout: Random key for dropout
 
         Returns:
             Weighted messages [E, H*C]
+
+        Raises:
+            RuntimeError: If the layer was built with ``edge_dim`` but ``edge_attr`` is None.
         """
         H, C = self.heads, self.out_features
 
@@ -260,13 +264,17 @@ class TransformerConv(MessagePassing):
         key_j = key_j.reshape(-1, H, C)
         value_j = value_j.reshape(-1, H, C)
 
+        # Add the projected edge features to both keys and values, so that edge
+        # information conditions the attention scores as well as the messages
+        if self.lin_edge is not None:
+            if edge_attr is None:
+                raise RuntimeError("edge_dim was set at construction, so edge_attr is required.")
+            edge_feat = self.lin_edge(edge_attr).reshape(-1, H, C)
+            key_j = key_j + edge_feat
+            value_j = value_j + edge_feat
+
         # Compute attention scores
         alpha = (query_i * key_j).sum(axis=-1) / jnp.sqrt(C)  # [E, H]
-
-        # Add edge features if provided
-        if edge_attr is not None and self.lin_edge is not None:
-            edge_feat = self.lin_edge(edge_attr).reshape(-1, H, C)
-            value_j = value_j + edge_feat
 
         # Apply softmax to get attention weights
         alpha = scatter_softmax(alpha, index, dim=0, dim_size=size_i)
