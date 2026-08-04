@@ -233,9 +233,9 @@ GINConv
 
       # Create MLP for GIN
       mlp = MLP(
-          channel_list=[16, 32, 32],
+          feature_list=[16, 32, 32],
           norm="batch_norm",
-          act="relu",
+          act=nnx.relu,
           rngs=nnx.Rngs(0)
       )
 
@@ -273,7 +273,7 @@ EdgeConv
 
       # MLP processes edge features [x_i || x_j - x_i]
       mlp = MLP(
-          channel_list=[32, 64, 64],
+          feature_list=[32, 64, 64],
           rngs=nnx.Rngs(0)
       )
 
@@ -312,7 +312,7 @@ DynamicEdgeConv
 
       # Create MLP for edge processing [x_i || x_j - x_i]
       mlp = MLP(
-          channel_list=[6, 64, 128],  # Input: 2*3=6 for 3D points
+          feature_list=[6, 64, 128],  # Input: 2*3=6 for 3D points
           rngs=nnx.Rngs(0)
       )
 

@@ -250,11 +250,21 @@ class MessagePassing(Module):
     ) -> jnp.ndarray:
         """Fused message and aggregation for efficiency.
 
-        Override this hook when message computation and aggregation can be fused
-        into a single pass, *e.g.* when a sum aggregation of linearly transformed
-        neighbours can be expressed without materializing all messages.
+        The base class provides no fused path and always raises; override this
+        hook when message computation and aggregation can be expressed in a
+        single pass, *e.g.* when a sum aggregation of linearly transformed
+        neighbours does not need all messages materialized.
         :meth:`propagate` dispatches here only for subclasses that override it,
-        in which case :meth:`message` and :meth:`aggregate` are not called.
+        and then calls neither :meth:`message` nor :meth:`aggregate`; it still
+        passes the returned array through :meth:`update`.
+
+        An override receives the arguments of :meth:`propagate` untouched: ``x``
+        is the whole node feature table -- or the ``(x_src, x_dst)`` tuple, with
+        ``x[0]`` the source set -- and not the per-edge gather, and
+        ``edge_index`` is the raw edge index, whose rows are ``(source, target)``
+        for :obj:`flow="source_to_target"` and ``(target, source)`` otherwise.
+        Gathering the endpoints and honouring :attr:`flow` is therefore the
+        override's own job.
 
         Args:
             x: Node features, or a ``(x_src, x_dst)`` tuple for bipartite graphs

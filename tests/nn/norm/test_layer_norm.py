@@ -100,17 +100,23 @@ def test_layer_norm_graph_mode_differs_from_node_mode():
 
 
 def test_layer_norm_graph_mode_no_batch():
-    """Graph mode without a batch vector normalizes the whole input as one graph."""
-    key = random.PRNGKey(7)
-    x = random.normal(key, (30, 8)) * 3.0 + 2.0
+    """Graph mode without a batch vector reduces over every node and every feature."""
+    x = jnp.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0]])
 
-    norm = LayerNorm(8, mode="graph", rngs=nnx.Rngs(0))
+    norm = LayerNorm(2, mode="graph", rngs=nnx.Rngs(0))
     out_no_batch = norm(x)
-    out_single_graph = norm(x, jnp.zeros(30, dtype=jnp.int32))
 
-    assert jnp.allclose(out_no_batch, out_single_graph, atol=1e-6)
-    assert jnp.allclose(out_no_batch.mean(), 0.0, atol=1e-5)
-    assert jnp.allclose(out_no_batch.std(), 1.0, atol=1e-4)
+    # A single scalar mean/variance taken over the whole 4x2 block.
+    expected = (x - x.mean()) / jnp.sqrt(x.var() + 1e-5)
+    assert jnp.allclose(out_no_batch, expected, atol=1e-4)
+
+    # The implicit single-graph assignment matches an explicit all-zero batch vector.
+    assert jnp.allclose(out_no_batch, norm(x, jnp.zeros(4, dtype=jnp.int32)), atol=1e-6)
+
+    # Node-wise statistics would send every row to [-1, +1]; graph mode must not.
+    node_out = LayerNorm(2, mode="node", rngs=nnx.Rngs(0))(x)
+    assert jnp.allclose(node_out, jnp.tile(jnp.array([-1.0, 1.0]), (4, 1)), atol=1e-4)
+    assert not jnp.allclose(out_no_batch, node_out, atol=1e-3)
 
 
 @pytest.mark.parametrize("use_bias,use_scale", [(False, True), (True, False), (False, False)])
@@ -156,16 +162,28 @@ def test_layer_norm_graph_mode_empty_graph():
         assert jnp.allclose(graph_out.std(), 1.0, atol=1e-4)
 
 
-def test_layer_norm_graph_mode_preserves_mask_argument():
-    """The ``mask`` keyword is not clobbered by the graph-mode reduction."""
-    key = random.PRNGKey(13)
-    x = random.normal(key, (6, 4))
+def test_layer_norm_graph_mode_ignores_mask():
+    """Graph mode reduces over every node of a graph, whatever ``mask`` selects."""
+    x = jnp.array(
+        [[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0], [5.0, 500.0], [6.0, 600.0]]
+    )
     batch = jnp.array([0, 0, 0, 1, 1, 1], dtype=jnp.int32)
+    partial_mask = jnp.array([True, False, True, False, True, True])
 
-    norm = LayerNorm(4, mode="graph", rngs=nnx.Rngs(0))
-    node_mask = jnp.ones(6, dtype=bool)
+    norm = LayerNorm(2, mode="graph", rngs=nnx.Rngs(0))
+    out = norm(x, batch, mask=partial_mask)
 
-    assert jnp.allclose(norm(x, batch, mask=node_mask), norm(x, batch))
+    # Statistics come from the full 3x2 block of each graph, not from the masked-in rows.
+    for lo, hi in [(0, 3), (3, 6)]:
+        block = x[lo:hi]
+        expected = (block - block.mean()) / jnp.sqrt(block.var() + 1e-5)
+        assert jnp.allclose(out[lo:hi], expected, atol=1e-4)
+
+        masked_block = block[partial_mask[lo:hi]]
+        masked_expected = (block - masked_block.mean()) / jnp.sqrt(masked_block.var() + 1e-5)
+        assert not jnp.allclose(out[lo:hi], masked_expected, atol=1e-3)
+
+    assert jnp.allclose(out, norm(x, batch), atol=1e-6)
 
 
 def test_layer_norm_graph_mode_jit():
@@ -264,7 +282,7 @@ if __name__ == "__main__":
     test_layer_norm_graph_mode_partial_affine(False, False)
     test_layer_norm_graph_mode_dtype()
     test_layer_norm_graph_mode_empty_graph()
-    test_layer_norm_graph_mode_preserves_mask_argument()
+    test_layer_norm_graph_mode_ignores_mask()
     test_layer_norm_graph_mode_jit()
     test_layer_norm_unknown_mode()
     test_layer_norm_no_affine()

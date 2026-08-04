@@ -343,8 +343,8 @@ Train/Eval Modes
 
     # Weights stay synchronized automatically - no copying needed!
     print("Weights shared:", jnp.allclose(
-        model.convs[0].linear.kernel.value,
-        eval_model.convs[0].linear.kernel.value
+        model.convs[0].lin.kernel[...],
+        eval_model.convs[0].lin.kernel[...]
     ))
     >>> Weights shared: True
 

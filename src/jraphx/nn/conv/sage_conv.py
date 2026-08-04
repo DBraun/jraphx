@@ -127,7 +127,7 @@ class SAGEConv(MessagePassing):
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
+        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray | None]],
         edge_index: jnp.ndarray,
         edge_attr: jnp.ndarray | None = None,
         size: tuple[int, int] | None = None,
@@ -135,19 +135,23 @@ class SAGEConv(MessagePassing):
         """Forward pass of the GraphSAGE layer.
 
         Args:
-            x: Node features or tuple of (source, target) features for bipartite graphs
+            x: Node features, or a ``(x_src, x_dst)`` tuple for bipartite graphs.
+                ``x_dst`` may be :obj:`None`, in which case no root features are
+                added and the target set is assumed to be as large as the source
+                set unless ``size`` says otherwise.
             edge_index: Edge indices [2, num_edges]
             edge_attr: Optional edge features (not used in GraphSAGE)
             size: Optional size (num_src_nodes, num_dst_nodes) for bipartite graphs
 
         Returns:
-            Updated node features [num_nodes, out_features]
+            Updated node features [num_dst_nodes, out_features]
         """
         if isinstance(x, tuple):
             x_src, x_dst = x
             # The aggregation buffer is sized by the target set
             if size is None:
-                size = (x_src.shape[0], x_dst.shape[0])
+                num_dst_nodes = x_src.shape[0] if x_dst is None else x_dst.shape[0]
+                size = (x_src.shape[0], num_dst_nodes)
         else:
             x_src = x_dst = x
 

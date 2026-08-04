@@ -1,6 +1,145 @@
 Changelog
 =========
 
+Version 0.1.0 (unreleased)
+--------------------------
+
+This release brings a large number of layers, utilities and data structures in line
+with :obj:`torch_geometric` semantics. Numerical outputs, module state layouts and a
+few public signatures change as a result, so upgrading from 0.0.4 requires the
+migrations listed below.
+
+**Breaking Changes -- Public API**
+
+* ``GCNConv(cached=True)`` no longer fills its cache on the first forward pass. Call
+  ``conv.precompute_norm(edge_index, edge_weight=None, num_nodes=None)`` once, outside
+  of any JAX transformation, before the first forward pass; otherwise the layer raises
+  a ``RuntimeError``. Use ``conv.reset_cache()`` before re-running ``precompute_norm``
+  for a different graph, or keep ``cached=False`` to normalize on every call.
+* ``MessagePassing.propagate`` follows the PyG bipartite convention: ``x`` is either a
+  single feature table or an ``(x_src, x_dst)`` tuple, where ``x_src`` holds the source
+  set and ``x_dst`` the target set. The output has one row per target node. Passing a
+  tuple whose sizes disagree with an explicit ``size`` raises a ``ValueError``.
+* ``MessagePassing.message`` is invoked exactly once per forward pass.
+  ``MessagePassing.message_and_aggregate`` is now an opt-in fused hook: the base class
+  raises ``NotImplementedError``, and ``propagate`` dispatches to it only for subclasses
+  that override it. Its first argument is the node feature table (or bipartite tuple),
+  not the pre-computed messages.
+* ``Batch`` is a valid JAX pytree. Its batching configuration --
+  ``NODE_INDEX_FIELDS``, ``ELEMENT_LEVEL_FIELDS``, ``GRAPH_LEVEL_FIELDS`` and
+  ``_DATA_CLASS`` -- are ``ClassVar`` class attributes rather than dataclass fields, so
+  they no longer appear in ``Batch.__init__``, in ``dataclasses.fields(Batch)`` or in
+  the pytree. Replace ``Batch(x=..., NODE_INDEX_FIELDS={'face'})`` with a ``Batch``
+  subclass that declares ``NODE_INDEX_FIELDS: ClassVar[set[str]] = {'face'}`` in its
+  class body.
+* ``to_edge_index`` always returns an edge attribute array; it never returns
+  :obj:`None` for the second element.
+* ``to_undirected`` coalesces its result: the returned edge list is row-wise sorted,
+  duplicated edges appear once, and their features are merged with ``reduce``. The
+  number of edges is therefore data-dependent and the function cannot be traced by
+  :obj:`jax.jit`.
+* ``coalesce`` and ``to_undirected`` accept ``reduce="sum"`` as an alias of
+  ``reduce="add"``. ``scatter``, on the other hand, rejects unknown reductions with an
+  explicit ``ValueError``; only ``"add"``/``"sum"``, ``"mean"``, ``"max"`` and
+  ``"min"`` are supported (``"mul"`` was never implemented).
+* ``TopKPooling``/``SAGPooling`` interpret ``ratio`` by type, matching PyG: a
+  :obj:`float` keeps :math:`\lceil \mathrm{ratio} \cdot N_i \rceil` nodes per graph and
+  an :obj:`int` keeps exactly that many. ``ratio=2.0`` previously kept two nodes and
+  now keeps every node; write ``ratio=2`` for the old behaviour.
+* Pooling is explicit about traceability. ``global_add_pool``, ``global_mean_pool``,
+  ``global_max_pool`` and ``global_min_pool`` raise a ``ValueError`` when ``batch`` is a
+  tracer and ``size`` is omitted -- pass ``size=<num_graphs>`` inside :obj:`jax.jit` or
+  :obj:`jax.vmap`. ``TopKPooling`` and ``SAGPooling`` select a data-dependent number of
+  nodes and cannot be traced at all. ``LayerNorm(mode="graph")`` and ``GraphNorm``
+  likewise need an explicit ``batch_size`` under a trace.
+
+**Breaking Changes -- Module State Layout**
+
+Checkpoints written by 0.0.4 are not loadable as-is:
+
+* ``GCNConv`` builds its inner ``Linear`` with ``use_bias=False`` and holds its own
+  bias, which is added after aggregation. The state key moves from ``linear.bias`` to
+  ``bias``.
+* ``GraphNorm`` gains a ``mean_scale`` parameter, initialized to ones.
+* ``BatchNorm`` stores ``running_mean``, ``running_var`` and ``num_batches_tracked`` as
+  ``nnx.BatchStat`` instead of ``nnx.Variable``, so ``nnx.split`` and
+  ``nnx.state(..., nnx.Param)`` partition them differently.
+
+**Breaking Changes -- Numerics**
+
+Trained weights still load (subject to the state-layout notes above), but outputs move:
+
+* ``GATConv``/``GATv2Conv`` normalize attention coefficients per head. Outputs change
+  for ``heads > 1``.
+* ``TransformerConv`` adds the projected edge features to the keys as well as to the
+  values, so edge information conditions the attention scores.
+* ``GCNConv`` normalizes by weighted degree (rather than by edge count) and adds its
+  bias after aggregation.
+* ``GraphNorm`` computes per-feature, per-graph statistics and applies the learnable
+  ``mean_scale``.
+* ``LayerNorm(mode="graph")`` reduces over both the node axis and the feature axis for
+  each graph, making it genuinely distinct from ``mode="node"``.
+* ``BatchNorm`` pools statistics over every node of the mini-batch and ignores the
+  ``batch`` vector, which it previously used to average per-graph statistics. Its
+  running variance now tracks the unbiased estimator, matching PyTorch. Use
+  ``GraphNorm`` when per-graph statistics are wanted.
+* ``TopKPooling``/``SAGPooling`` always apply the score gate to the pooled features, so
+  the scoring projection receives gradient. ``multiplier`` is applied after the gate and
+  does not influence node selection.
+* ``JumpingKnowledge(mode="lstm")`` computes the correct bidirectional GRU recurrence,
+  so its outputs change.
+* ``scatter_std`` applies Bessel's correction by default, matching ``torch_scatter``.
+  Pass ``unbiased=False`` for the previous population standard deviation.
+* ``scatter_max``/``scatter_min`` preserve integer input dtypes instead of promoting to
+  float.
+* ``GCNConv`` matches :obj:`torch_geometric` on graphs that already contain self-loops:
+  an existing loop keeps its own weight and is counted once in the degree instead of
+  being duplicated alongside an injected unit loop. To keep the output shape static and
+  therefore traceable, the duplicated row remains in the returned ``edge_index`` with
+  weight ``0.0``; every coefficient and the convolution output agree with PyG.
+* ``TopKPooling(min_score=...)`` thresholds and gates with the softmax of the
+  unnormalized projection :math:`Xp`, matching PyG's ``SelectTopK``. The projection was
+  previously divided by :math:`\lVert p \rVert` first, which rescaled the logits and
+  collapsed the gate to nearly one-hot at initialization. The ``ratio`` path is
+  unchanged and still normalizes by :math:`\lVert p \rVert`.
+
+**Bug Fixes**
+
+* ``global_max_pool``/``global_min_pool``/``global_mean_pool`` keep the rank of the node
+  features: a 1-D input ``[num_nodes]`` pools to ``[batch_size]``, and inputs such as
+  ``[num_nodes, heads, features]`` pool to ``[batch_size, heads, features]``.
+* ``scatter_log_softmax`` returns ``-inf`` rather than ``NaN`` for a group whose entries
+  are all ``-inf``, so ``exp()`` of the result matches ``scatter_softmax``.
+* ``coalesce`` accumulates edge identifiers in ``int64``, fixing silent overflow on
+  graphs with more than roughly 46k nodes.
+* ``Batch.from_data_list`` rejects an attribute that is present on only some graphs when
+  that attribute aligns with the batch vector, and accepts one that aligns with the edge
+  or element axis -- an edgeless graph may sit alongside graphs carrying ``edge_attr``.
+* ``Batch.to_data_list`` preserves trailing graphs that contain no nodes, and keeps the
+  leading dimension of a graph-level ``y``.
+* ``SAGEConv`` accepts the ``(x_src, None)`` bipartite pair again, and ``EdgeConv`` and
+  ``GINConv`` accept the ``(x_src, x_dst)`` tuples their docstrings advertise.
+* ``add_self_loops`` with a string ``fill_value`` no longer requires ``num_nodes``.
+
+**Other Changes**
+
+* ``GCN`` gains ``precompute_norm(edge_index, edge_weight=None, num_nodes=None)``, which
+  fills the cache of every ``GCNConv`` layer at once. It must be called eagerly before
+  the first forward pass of a ``GCN(cached=True)``.
+* Passing ``edge_weight`` to a ``BasicGNN`` whose ``supports_edge_weight`` is
+  :obj:`False` (or ``edge_attr`` when ``supports_edge_attr`` is :obj:`False`) raises a
+  ``ValueError`` instead of silently dropping the argument. Custom ``BasicGNN``
+  subclasses that forward edge information must set the corresponding class attribute.
+
+* The ``batch_size`` argument of ``BasicGNN.__call__`` (and therefore ``GCN``, ``GAT``,
+  ``GraphSAGE``, ``GIN``) and of ``MLP.__call__`` is forwarded to the ``layer_norm`` and
+  ``graph_norm`` layers instead of being ignored. Supply it as a Python :obj:`int` when
+  such a model is traced together with a ``batch`` vector.
+* The deprecated Flax ``.value`` accessor is gone throughout the library. Use
+  ``variable[...]`` for array-valued ``nnx.Variable`` objects and
+  ``variable.get_value()``/``variable.set_value(x)`` for variables that may hold
+  :obj:`None`.
+
 Version 0.0.4
 -------------
 

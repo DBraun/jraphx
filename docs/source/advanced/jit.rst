@@ -113,6 +113,22 @@ When creating custom **JraphX** layers, ensure they are JIT-compatible by follow
         layer = CustomGNNLayer(16, 32, rngs=nnx.Rngs(42))
         return layer(x, edge_index)
 
+Operations That Need Static Sizes
+---------------------------------
+
+A few operations produce a data-dependent number of rows, which XLA cannot express:
+
+* :func:`~jraphx.nn.pool.global_add_pool` and friends need ``size=<num_graphs>`` when
+  ``batch`` is traced, otherwise they raise a :obj:`ValueError`.
+* :class:`~jraphx.nn.norm.GraphNorm` and :class:`~jraphx.nn.norm.LayerNorm` with
+  ``mode="graph"`` need ``batch_size=<num_graphs>`` under a trace.
+* :class:`~jraphx.nn.pool.TopKPooling` and :class:`~jraphx.nn.pool.SAGPooling` keep a
+  data-dependent number of nodes and cannot be traced.
+* :func:`~jraphx.utils.coalesce` and :func:`~jraphx.utils.to_undirected` return a
+  data-dependent number of edges and cannot be traced.
+* :class:`~jraphx.nn.conv.GCNConv` with ``cached=True`` must have its cache filled by an
+  eager ``precompute_norm()`` call before the traced forward pass.
+
 Performance Benefits
 --------------------
 

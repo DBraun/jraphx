@@ -10,6 +10,48 @@ from jraphx.utils.loop import add_self_loops as add_self_loops_fn
 from jraphx.utils.num_nodes import maybe_num_nodes
 
 
+def _add_remaining_self_loops(
+    edge_index: jnp.ndarray,
+    edge_weight: jnp.ndarray,
+    fill_value: float,
+    num_nodes: int,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Give every node exactly one self-loop, keeping the weight it already has.
+
+    One loop :math:`(i, i)` is appended for each of the ``num_nodes`` nodes. An
+    edge of the input that already is a self-loop keeps its weight: that weight
+    is carried over to the appended loop and the original entry is set to zero,
+    so a node's loop is counted exactly once in the degree. Nodes without a
+    self-loop get ``fill_value``. The result always has
+    ``num_edges + num_nodes`` edges, which keeps the transformation traceable by
+    :obj:`jax.jit`.
+
+    Args:
+        edge_index: Edge indices [2, num_edges]
+        edge_weight: Edge weights [num_edges]
+        fill_value: Weight given to the self-loop of a node that has none
+        num_nodes: Number of nodes
+
+    Returns:
+        Tuple of (edge indices with self-loops, edge weights with self-loops)
+    """
+    row = edge_index[0]
+    is_loop = row == edge_index[1]
+
+    # Scatter positions outside of the array are dropped, so only pre-existing
+    # self-loops overwrite the fill value of their node.
+    loop_weight = jnp.full(num_nodes, fill_value, dtype=edge_weight.dtype)
+    loop_weight = loop_weight.at[jnp.where(is_loop, row, num_nodes)].set(edge_weight, mode="drop")
+
+    edge_weight = jnp.where(is_loop, jnp.zeros_like(edge_weight), edge_weight)
+
+    loop_nodes = jnp.arange(num_nodes, dtype=edge_index.dtype)
+    edge_index = jnp.concatenate([edge_index, jnp.stack([loop_nodes, loop_nodes])], axis=1)
+    edge_weight = jnp.concatenate([edge_weight, loop_weight])
+
+    return edge_index, edge_weight
+
+
 class GCNConv(MessagePassing):
     r"""The graph convolutional operator from the `"Semi-supervised
     Classification with Graph Convolutional Networks"
@@ -56,8 +98,9 @@ class GCNConv(MessagePassing):
             (default: :obj:`False`)
         add_self_loops (bool, optional): If set to :obj:`False`, will not add
             self-loops to the input graph. By default, self-loops will be added
-            when :obj:`normalize` is set to :obj:`True`.
-            (default: :obj:`True`)
+            when :obj:`normalize` is set to :obj:`True`. A node that already
+            carries a self-loop keeps that loop's weight instead of receiving a
+            second one. (default: :obj:`True`)
         normalize (bool, optional): Whether to add self-loops and compute
             symmetric normalization coefficients on-the-fly.
             (default: :obj:`True`)
@@ -159,6 +202,11 @@ class GCNConv(MessagePassing):
         computed over the edge weights after self-loop insertion. Nodes with a
         non-positive weighted degree receive a normalization factor of zero.
 
+        Every node ends up with exactly one self-loop. A self-loop that is
+        already present in :attr:`edge_index` keeps its own weight and is not
+        duplicated: its entry is zeroed out and its weight moves to the appended
+        loop, so it enters the degree once instead of twice.
+
         Args:
             edge_index: Edge indices [2, num_edges]
             edge_weight: Edge weights [num_edges]
@@ -176,14 +224,14 @@ class GCNConv(MessagePassing):
         if edge_weight is None:
             edge_weight = jnp.ones(edge_index.shape[1], dtype=dtype)
 
-        # Add self-loops
+        # Add self-loops, without duplicating the ones already present
         if add_self_loops:
             fill_value = 2.0 if improved else 1.0
-            edge_index, edge_weight = add_self_loops_fn(
+            edge_index, edge_weight = _add_remaining_self_loops(
                 edge_index,
                 edge_weight,
-                fill_value=fill_value,
-                num_nodes=num_nodes,
+                fill_value,
+                num_nodes,
             )
 
         # Compute normalization using optimized degree computation

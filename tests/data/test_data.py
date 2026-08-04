@@ -5,8 +5,20 @@ import dataclasses
 import jax
 import jax.numpy as jnp
 import pytest
+from flax.struct import dataclass
 
 from jraphx.data import Data
+
+
+@dataclass
+class CustomData(Data):
+    """A Data subclass built with the documented subclassing recipe."""
+
+    custom_attr: jnp.ndarray | None = None
+
+    def __eq__(self, other: object) -> bool:
+        """Delegate to the base class so array fields compare element-wise."""
+        return Data.__eq__(self, other)
 
 
 def _line_graph() -> Data:
@@ -37,6 +49,11 @@ class TestCounts:
 
     def test_num_nodes_from_pos(self) -> None:
         data = Data(pos=jnp.zeros((5, 3)))
+        assert data.num_nodes == 5
+
+    def test_num_nodes_prefers_pos_over_edge_index(self) -> None:
+        """pos counts every node, while edge_index undercounts isolated ones."""
+        data = Data(pos=jnp.zeros((5, 3)), edge_index=jnp.array([[0], [1]], dtype=jnp.int32))
         assert data.num_nodes == 5
 
     def test_num_nodes_empty(self) -> None:
@@ -155,6 +172,12 @@ class TestEquality:
 
     def test_membership_uses_equality(self) -> None:
         assert _line_graph() in [_line_graph()]
+
+    def test_subclass_delegating_eq_compares_element_wise(self) -> None:
+        """The documented subclassing recipe keeps == working on array fields."""
+        assert CustomData(x=jnp.zeros((3, 2))) == CustomData(x=jnp.zeros((3, 2)))
+        assert CustomData(custom_attr=jnp.zeros((2,))) != CustomData(custom_attr=jnp.ones((2,)))
+        assert CustomData(x=jnp.zeros((3, 2))) != Data(x=jnp.zeros((3, 2)))
 
 
 class TestImmutability:

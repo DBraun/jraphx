@@ -13,9 +13,10 @@ from jraphx.data.data import Data, fields_equal
 def _require_all_present(key: str, values: list, num_graphs: int) -> None:
     """Reject an attribute that only some of the batched graphs carry.
 
-    Concatenating such an attribute would produce an array whose length no
-    longer matches the batch vector, silently misaligning every downstream
-    scatter or gather.
+    This is the rule for attributes aligned with the batch vector, such as node
+    features and per-graph labels: concatenating them when a graph omits its
+    contribution produces an array whose length no longer matches the batch
+    vector, silently misaligning every downstream scatter or gather.
 
     Args:
         key: Name of the attribute being collated.
@@ -30,6 +31,33 @@ def _require_all_present(key: str, values: list, num_graphs: int) -> None:
             f"Attribute {key!r} is present on {len(values)} of {num_graphs} graphs; "
             "batching requires it on all graphs or none"
         )
+
+
+def _require_axis_aligned(key: str, values: list, counts: list[int], axis_name: str) -> None:
+    """Reject an attribute whose rows disagree with the axis it aligns with.
+
+    This is the rule for attributes aligned with the edge or element axis rather
+    than with the batch vector. A graph that contributes no edges (or no indexed
+    elements) must contribute no rows, so omitting the attribute entirely is
+    legal there and only there.
+
+    Args:
+        key: Name of the attribute being collated.
+        values: Per-graph values for that attribute, holding ``None`` for every
+            graph that does not carry it.
+        counts: Per-graph length of the axis the attribute aligns with.
+        axis_name: Plural name of the aligned elements, used in the message.
+
+    Raises:
+        RuntimeError: If any graph's row count differs from its axis length.
+    """
+    for index, (value, count) in enumerate(zip(values, counts, strict=True)):
+        rows = 0 if value is None else value.shape[0]
+        if rows != count:
+            raise RuntimeError(
+                f"Attribute {key!r} has {rows} rows on graph {index} but that graph "
+                f"contributes {count} {axis_name}; the two must match"
+            )
 
 
 @dataclass
@@ -59,6 +87,11 @@ class Batch(Data):
         normal: jnp.ndarray | None = None
         face_color: jnp.ndarray | None = None
 
+        # flax.struct.dataclass regenerates __eq__ for every subclass, so
+        # delegate to keep comparing array fields element-wise
+        def __eq__(self, other: object) -> bool:
+            return Data.__eq__(self, other)
+
     @dataclass
     class FaceBatch(Batch):
         face: jnp.ndarray | None = None
@@ -73,6 +106,9 @@ class Batch(Data):
 
         # The Data class produced by :meth:`to_data_list`
         _DATA_CLASS: ClassVar[type | None] = FaceData
+
+        def __eq__(self, other: object) -> bool:
+            return Batch.__eq__(self, other)
     ```
     """
 
@@ -86,6 +122,16 @@ class Batch(Data):
 
     # The corresponding Data class used when unbatching
     _DATA_CLASS: ClassVar[type | None] = None
+
+    @classmethod
+    def _primary_index_field(cls) -> str | None:
+        """Return the node index field that element-level attributes align with.
+
+        Returns:
+            The first entry of :attr:`NODE_INDEX_FIELDS`, or ``None`` when the
+            class declares no index fields.
+        """
+        return next(iter(cls.NODE_INDEX_FIELDS), None)
 
     @classmethod
     def from_data_list(cls, data_list: list[Data]) -> "Batch":
@@ -103,10 +149,16 @@ class Batch(Data):
             A Batch object containing all graphs.
 
         Raises:
-            RuntimeError: If an attribute that must align with the batch vector
-                is present on some but not all graphs. ``edge_index`` and the
-                fields listed in :attr:`NODE_INDEX_FIELDS` are exempt, since a
-                graph may legitimately have no edges or no indexed elements.
+            RuntimeError: If an attribute aligned with the batch vector is
+                present on some but not all graphs, or if an attribute aligned
+                with the edge or element axis contributes a number of rows that
+                differs from the number of edges or elements its graph
+                contributes. ``edge_index`` and the fields listed in
+                :attr:`NODE_INDEX_FIELDS` define those axes and are therefore
+                never required to be present: a graph may legitimately have no
+                edges and no indexed elements, in which case ``edge_attr`` and
+                the fields listed in :attr:`ELEMENT_LEVEL_FIELDS` may be absent
+                too.
         """
         if len(data_list) == 0:
             return cls()
@@ -126,10 +178,21 @@ class Batch(Data):
         element_level_fields = getattr(cls, "ELEMENT_LEVEL_FIELDS", set())
         graph_level_fields = getattr(cls, "GRAPH_LEVEL_FIELDS", set())
 
+        # Lengths of the axes that non-batch-aligned attributes align with
+        edge_counts = [
+            0 if data.edge_index is None else data.edge_index.shape[1] for data in data_list
+        ]
+        primary_index_field = cls._primary_index_field()
+        if primary_index_field is None:
+            element_counts = None
+        else:
+            primary_values = [getattr(data, primary_index_field, None) for data in data_list]
+            element_counts = [0 if v is None else v.shape[-1] for v in primary_values]
+
         # Process each attribute
         for key in keys:
-            values = [getattr(data, key, None) for data in data_list]
-            values = [v for v in values if v is not None]
+            raw_values = [getattr(data, key, None) for data in data_list]
+            values = [v for v in raw_values if v is not None]
 
             if len(values) == 0:
                 continue
@@ -170,14 +233,25 @@ class Batch(Data):
                 batch_dict[key] = jnp.stack(values)
 
             elif key in element_level_fields:
-                # Concatenate element-level features
-                # These will be split during unbatching based on the corresponding node index field
-                _require_all_present(key, values, num_graphs)
+                # Element-level features align with the elements indexed by the
+                # primary node index field, so a graph with no elements
+                # contributes no rows. They are split during unbatching using
+                # that field's mask.
+                if element_counts is None:
+                    _require_all_present(key, values, num_graphs)
+                else:
+                    _require_axis_aligned(key, raw_values, element_counts, "elements")
                 batch_dict[key] = jnp.concatenate(values, axis=0)
 
-            elif key in ["x", "edge_attr", "pos", "y"]:
-                # Standard node/edge features and labels. Scalars are promoted
-                # to a leading graph axis; everything else concatenates, so a
+            elif key == "edge_attr":
+                # Edge features align with the edge axis rather than with the
+                # batch vector, so a graph with no edges contributes no rows.
+                _require_axis_aligned(key, raw_values, edge_counts, "edges")
+                batch_dict[key] = jnp.concatenate(values, axis=0)
+
+            elif key in ["x", "pos", "y"]:
+                # Standard node features and labels. Scalars are promoted to a
+                # leading graph axis; everything else concatenates, so a
                 # per-graph label of shape (1,) and a node-level label both end
                 # up on axis 0 exactly as torch_geometric collates them.
                 _require_all_present(key, values, num_graphs)
@@ -225,7 +299,9 @@ class Batch(Data):
         The distinction between a graph-level and a node-level ``y`` is
         recovered from its leading dimension, which is ambiguous when the batch
         happens to hold exactly one node per graph; in that case ``y`` is read
-        as graph-level.
+        as graph-level. A graph-level label is returned with a leading axis of
+        length one, so a label collated from per-graph scalars comes back with
+        shape ``(1,)``.
 
         Returns:
             List of individual Data objects.
@@ -256,9 +332,9 @@ class Batch(Data):
         element_level_fields = getattr(type(self), "ELEMENT_LEVEL_FIELDS", set())
         graph_level_fields = getattr(type(self), "GRAPH_LEVEL_FIELDS", set())
 
-        # Find the primary node index field for face-level data
-        # (Usually the first one, like 'face' for face-level attributes)
-        primary_index_field = list(node_index_fields)[0] if node_index_fields else None
+        # Find the primary node index field that element-level data aligns with
+        # (Usually the only one, like 'face' for face-level attributes)
+        primary_index_field = type(self)._primary_index_field()
 
         # Split data back into individual graphs
         data_list = []
@@ -319,8 +395,9 @@ class Batch(Data):
             # Handle labels
             if self.y is not None:
                 if self.y.shape[0] == num_graphs:
-                    # Graph-level labels
-                    data_dict["y"] = self.y[i]
+                    # Graph-level labels keep their leading axis, mirroring the
+                    # narrow torch_geometric applies along the collation axis
+                    data_dict["y"] = self.y[i : i + 1]
                 else:
                     # Node-level labels
                     data_dict["y"] = self.y[node_mask]

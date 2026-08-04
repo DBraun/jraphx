@@ -140,7 +140,6 @@ The Data subclass will have easy-to-understand additional fields. The correspond
 .. code-block:: python
 
     from flax.struct import dataclass
-    from typing import Optional
     import jraphx
 
     @dataclass
@@ -168,6 +167,14 @@ The Data subclass will have easy-to-understand additional fields. The correspond
             """Use the nice shape-based representation from parent class."""
             return jraphx.Batch.__repr__(self)
 
+        def __eq__(self, other: object) -> bool:
+            """Compare arrays element-wise.
+
+            ``flax.struct.dataclass`` regenerates ``__eq__`` for every subclass,
+            so the delegation has to be repeated in each subclass body.
+            """
+            return jraphx.Batch.__eq__(self, other)
+
     # Create mesh graphs
     mesh1 = FaceData(
         x=jnp.ones((4, 3)),  # 4 vertices
@@ -194,6 +201,12 @@ The batching system provides three configuration options:
 - **NODE_INDEX_FIELDS**: Fields containing node indices that need adjustment during batching (like ``edge_index`` or ``face``)
 - **ELEMENT_LEVEL_FIELDS**: Fields that are element-level features aligned with a node index field (concatenated during batching)
 - **GRAPH_LEVEL_FIELDS**: Fields that are per-graph attributes (stacked, not concatenated)
+
+These are class-level configuration, not dataclass fields: they are ``ClassVar`` on
+``Batch``, so they do not appear in ``Batch.__init__``, in ``dataclasses.fields(Batch)``
+or in the pytree that JAX traverses. Declare them (together with ``_DATA_CLASS``) in the
+body of a ``Batch`` subclass, as above; passing them to the constructor raises a
+``TypeError``.
 
 Example: Molecular Graphs
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -225,6 +238,10 @@ Example: Molecular Graphs
         def __repr__(self) -> str:
             """Use the nice shape-based representation from parent class."""
             return jraphx.Batch.__repr__(self)
+
+        def __eq__(self, other: object) -> bool:
+            """Compare arrays element-wise."""
+            return jraphx.Batch.__eq__(self, other)
 
     # Create molecules
     mol1 = MolecularData(

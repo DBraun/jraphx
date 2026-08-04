@@ -15,8 +15,12 @@ class BasicGNN(nnx.Module):
 
     Subclasses declare which optional edge information their convolution
     accepts through the :obj:`supports_edge_weight` and
-    :obj:`supports_edge_attr` class attributes; the forward pass only forwards
-    an argument that the underlying convolution actually consumes.
+    :obj:`supports_edge_attr` class attributes, both of which default to
+    :obj:`False`. The forward pass only forwards an argument that the
+    underlying convolution actually consumes, and raises a :obj:`ValueError`
+    when it is handed edge information the subclass has not declared, so that a
+    subclass missing those attributes fails loudly instead of silently training
+    on an unweighted graph.
 
     Args:
         in_features (int or tuple): Size of each input sample, or :obj:`-1` to
@@ -170,21 +174,45 @@ class BasicGNN(nnx.Module):
         edge_weight: jnp.ndarray | None = None,
         edge_attr: jnp.ndarray | None = None,
         batch: jnp.ndarray | None = None,
+        batch_size: int | None = None,
     ) -> jnp.ndarray:
         """Forward pass.
 
         Args:
             x: Node features [num_nodes, in_features]
             edge_index: Edge indices [2, num_edges]
-            edge_weight: Edge weights [num_edges], forwarded only if the
-                convolution supports edge weights
-            edge_attr: Edge attributes [num_edges, edge_dim], forwarded only if
-                the convolution supports edge attributes
-            batch: Batch vector used by ``batch_norm`` and ``graph_norm``
+            edge_weight: Edge weights [num_edges], requires
+                :obj:`supports_edge_weight`
+            edge_attr: Edge attributes [num_edges, edge_dim], requires
+                :obj:`supports_edge_attr`
+            batch: Batch vector used by ``batch_norm``, ``layer_norm`` and
+                ``graph_norm``
+            batch_size: Number of graphs in the mini-batch, forwarded to
+                ``layer_norm`` and ``graph_norm``. Must be supplied as a Python
+                :obj:`int` when the model is traced by :obj:`jax.jit`/
+                :obj:`nnx.jit` together with a ``batch`` vector, since the
+                number of segments is a static quantity.
 
         Returns:
             Output node features [num_nodes, out_features]
+
+        Raises:
+            ValueError: If ``edge_weight`` or ``edge_attr`` is given but the
+                model does not declare support for it.
         """
+        if edge_weight is not None and not self.supports_edge_weight:
+            raise ValueError(
+                f"'{type(self).__name__}' received 'edge_weight' but its convolution does "
+                f"not consume edge weights. Set 'supports_edge_weight = True' on the "
+                f"subclass if it does, or drop the argument"
+            )
+        if edge_attr is not None and not self.supports_edge_attr:
+            raise ValueError(
+                f"'{type(self).__name__}' received 'edge_attr' but its convolution does "
+                f"not consume edge attributes. Set 'supports_edge_attr = True' on the "
+                f"subclass if it does, or drop the argument"
+            )
+
         xs = []  # For JumpingKnowledge
 
         for i, conv in enumerate(self.convs):
@@ -214,10 +242,12 @@ class BasicGNN(nnx.Module):
                 # Normalization
                 if self.norms[i] is not None:
                     norm = self.norms[i]
-                    if self.norm_type in ("batch_norm", "graph_norm") and batch is not None:
+                    if self.norm_type == "batch_norm":
+                        # BatchNorm pools over every node of the mini-batch and
+                        # therefore has no segment count to make static
                         x = norm(x, batch)
                     else:
-                        x = norm(x)
+                        x = norm(x, batch, batch_size)
 
                 # Activation (if not first)
                 if self.act is not None and not self.act_first:

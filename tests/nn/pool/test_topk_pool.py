@@ -119,16 +119,34 @@ def test_topk_pool_edges_are_filtered_and_relabeled() -> None:
 
 
 def test_topk_pool_min_score_uses_softmax_scores() -> None:
-    """min_score thresholds softmax-normalized scores and gates with them."""
+    """min_score thresholds the softmax of the unnormalized projection and gates with it."""
     x = jnp.array([[3.0, 1.0], [1.0, 1.0], [0.0, 1.0]])
     edge_index = jnp.array([[0, 1], [1, 2]])
     pool = _deterministic_pool(ratio=0.5, min_score=0.5)
+    # A projection of norm 2 separates the softmax of the raw projection from the
+    # softmax of the projection divided by its norm.
+    pool.weight[...] = jnp.array([[2.0, 0.0]])
 
     out, _, _, _, perm = pool(x, edge_index)
 
-    softmax_scores = jax.nn.softmax(jnp.array([3.0, 1.0, 0.0]))
+    softmax_scores = jax.nn.softmax(jnp.array([6.0, 2.0, 0.0]))
     assert perm.tolist() == [0]
     assert jnp.allclose(out, x[:1] * softmax_scores[0])
+
+
+def test_topk_pool_min_score_softmax_is_temperature_sensitive() -> None:
+    """Scaling the projection sharpens the min_score softmax instead of leaving it fixed."""
+    x = jnp.array([[3.0, 1.0], [1.0, 1.0], [0.0, 1.0]])
+    edge_index = jnp.array([[0, 1], [1, 2]])
+
+    pool = _deterministic_pool(min_score=0.0)
+    gate = pool(x, edge_index)[0][0, 0] / x[0, 0]
+
+    pool.weight[...] = pool.weight[...] * 4.0
+    sharper_gate = pool(x, edge_index)[0][0, 0] / x[0, 0]
+
+    assert jnp.allclose(gate, jax.nn.softmax(jnp.array([3.0, 1.0, 0.0]))[0])
+    assert sharper_gate > gate
 
 
 def test_topk_pool_min_score_keeps_best_node() -> None:

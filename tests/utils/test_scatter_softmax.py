@@ -102,6 +102,33 @@ def test_scatter_log_softmax_exponentiates_to_softmax():
     assert jnp.allclose(jnp.exp(log_out), out, atol=1e-6)
 
 
+def test_scatter_log_softmax_fully_masked_group_is_neg_inf():
+    """A group whose entries are all -inf yields -inf rather than NaN."""
+    src = jnp.array([-jnp.inf, -jnp.inf, 1.0])
+    index = jnp.array([0, 0, 1])
+
+    log_out = scatter_log_softmax(src, index, dim_size=2)
+
+    assert not bool(jnp.any(jnp.isnan(log_out)))
+    assert bool(jnp.all(jnp.isneginf(log_out[:2])))
+    assert jnp.allclose(log_out[2], 0.0)
+
+    # Exponentiating reproduces the zeros that ``scatter_softmax`` returns.
+    assert jnp.allclose(jnp.exp(log_out), scatter_softmax(src, index, dim_size=2))
+
+
+def test_scatter_log_softmax_partially_masked_group():
+    """Masked entries drop out without perturbing their group's finite entries."""
+    src = jnp.array([1.0, -jnp.inf, 3.0])
+    index = jnp.array([0, 0, 0])
+
+    log_out = scatter_log_softmax(src, index, dim_size=1)
+
+    expected = jax.nn.log_softmax(jnp.array([1.0, 3.0]))
+    assert bool(jnp.isneginf(log_out[1]))
+    assert jnp.allclose(jnp.array([log_out[0], log_out[2]]), expected, atol=1e-6)
+
+
 def test_masked_scatter_softmax_excludes_masked_entries():
     """Masked entries neither contribute mass nor appear in the output."""
     src = jnp.array([1.0, 2.0, 3.0])

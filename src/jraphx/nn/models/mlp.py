@@ -171,12 +171,18 @@ class MLP(nnx.Module):
         self,
         x: jnp.ndarray,
         batch: jnp.ndarray | None = None,
+        batch_size: int | None = None,
     ) -> jnp.ndarray:
         """Forward pass.
 
         Args:
             x: Input features [num_nodes, in_features]
-            batch: Batch vector used by ``batch_norm``
+            batch: Batch vector used by ``batch_norm`` and ``layer_norm``
+            batch_size: Number of graphs in the mini-batch, forwarded to
+                ``layer_norm``. Must be supplied as a Python :obj:`int` when the
+                model is traced by :obj:`jax.jit`/:obj:`nnx.jit` together with a
+                ``batch`` vector, since the number of segments is a static
+                quantity.
 
         Returns:
             Output features [num_nodes, out_features]
@@ -193,11 +199,12 @@ class MLP(nnx.Module):
                 # Normalization
                 if i < len(self.norms) and self.norms[i] is not None:
                     norm = self.norms[i]
-                    # Check if norm layer supports batch parameter
-                    if self.norm_type == "batch_norm" and batch is not None:
+                    if self.norm_type == "batch_norm":
+                        # BatchNorm pools over every node of the mini-batch and
+                        # therefore has no segment count to make static
                         x = norm(x, batch)
                     else:
-                        x = norm(x)
+                        x = norm(x, batch, batch_size)
 
                 # Activation (if not first)
                 if self.act is not None and not self.act_first:

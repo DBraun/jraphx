@@ -15,9 +15,11 @@ def add_self_loops(
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
     r"""Adds a self-loop :math:`(i,i) \in \mathcal{E}` to every node
     :math:`i \in \mathcal{V}` in the graph given by :attr:`edge_index`.
-    In case the graph is weighted and already contains self-loops, only
-    non-existent self-loops will be added with edge weights denoted by
-    :obj:`fill_value`.
+    In case the graph is weighted or has multi-dimensional edge features
+    (:attr:`edge_attr` is not :obj:`None`), edge features of self-loops will be
+    added according to :obj:`fill_value`. One self-loop is appended per node
+    unconditionally, so a node that already has a self-loop ends up with two;
+    use :func:`add_remaining_self_loops` to add only the missing ones.
 
     Args:
         edge_index (jax.Array): The edge indices.

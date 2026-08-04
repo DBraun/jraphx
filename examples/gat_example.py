@@ -238,18 +238,24 @@ def demo_residual_connections():
     # Deep GAT with optional normalization
     class DeepGAT(nnx.Module):
         def __init__(self, use_residual=False, use_norm=False, rngs=None):
-            self.layers = [
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-            ]
+            # nnx.List makes the submodules part of the pytree; a plain list
+            # would be treated as a static attribute and rejected.
+            self.layers = nnx.List(
+                [
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                ]
+            )
             self.use_norm = use_norm
             if use_norm:
-                self.norms = [
-                    LayerNorm(16),
-                    LayerNorm(16),
-                    LayerNorm(16),
-                ]
+                self.norms = nnx.List(
+                    [
+                        LayerNorm(16),
+                        LayerNorm(16),
+                        LayerNorm(16),
+                    ]
+                )
 
         def __call__(self, x, edge_index):
             for i, layer in enumerate(self.layers):

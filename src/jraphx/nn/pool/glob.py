@@ -46,6 +46,19 @@ def _get_batch_size(batch: jnp.ndarray | None, size: int | None = None) -> int:
     return int(batch.max()) + 1
 
 
+def _align_per_graph(values: jnp.ndarray, ndim: int) -> jnp.ndarray:
+    """Reshape a per-graph vector so it broadcasts against pooled features.
+
+    Args:
+        values: Per-graph values [batch_size]
+        ndim: Rank of the pooled feature array to broadcast against
+
+    Returns:
+        ``values`` with ``ndim - 1`` trailing singleton axes appended
+    """
+    return values.reshape(values.shape + (1,) * (ndim - 1))
+
+
 def _zero_empty_segments(pooled: jnp.ndarray, batch: jnp.ndarray, batch_size: int) -> jnp.ndarray:
     """Replace the reduction identity of empty graphs by zeros.
 
@@ -54,7 +67,7 @@ def _zero_empty_segments(pooled: jnp.ndarray, batch: jnp.ndarray, batch_size: in
     which matches PyTorch Geometric and keeps downstream layers finite.
 
     Args:
-        pooled: Graph-level features [batch_size, num_features]
+        pooled: Graph-level features [batch_size, \\*feature_dims]
         batch: Batch indices for each node [num_nodes]
         batch_size: Number of graphs
 
@@ -66,7 +79,8 @@ def _zero_empty_segments(pooled: jnp.ndarray, batch: jnp.ndarray, batch_size: in
         batch,
         num_segments=batch_size,
     )
-    return jnp.where((counts > 0).reshape(-1, 1), pooled, jnp.zeros_like(pooled))
+    mask = _align_per_graph(counts > 0, pooled.ndim)
+    return jnp.where(mask, pooled, jnp.zeros_like(pooled))
 
 
 def global_add_pool(
@@ -159,7 +173,7 @@ def global_mean_pool(
 
     # Avoid division by zero and compute mean
     counts = jnp.maximum(counts, 1.0)
-    return sum_result / counts.reshape(-1, 1)
+    return sum_result / _align_per_graph(counts, sum_result.ndim)
 
 
 def global_max_pool(
@@ -173,12 +187,12 @@ def global_max_pool(
     any node pool to zeros.
 
     Args:
-        x: Node features [num_nodes, num_features]
+        x: Node features [num_nodes, \\*feature_dims], with any number of feature axes
         batch: Batch indices for each node [num_nodes]
         size: Number of graphs in the batch (required under jit/vmap)
 
     Returns:
-        Graph-level features [batch_size, num_features]
+        Graph-level features [batch_size, \\*feature_dims]
     """
     # Handle single graph case efficiently
     if batch is None:
@@ -206,12 +220,12 @@ def global_min_pool(
     any node pool to zeros.
 
     Args:
-        x: Node features [num_nodes, num_features]
+        x: Node features [num_nodes, \\*feature_dims], with any number of feature axes
         batch: Batch indices for each node [num_nodes]
         size: Number of graphs in the batch (required under jit/vmap)
 
     Returns:
-        Graph-level features [batch_size, num_features]
+        Graph-level features [batch_size, \\*feature_dims]
     """
     # Handle single graph case efficiently
     if batch is None:

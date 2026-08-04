@@ -257,6 +257,28 @@ def test_add_self_loops_fill_value_sum_alias():
     assert jnp.allclose(attr_sum[-2:], jnp.array([[0.0], [6.0]]))
 
 
+def test_add_self_loops_duplicates_existing_loops():
+    """``add_self_loops`` appends one loop per node without de-duplicating."""
+    edge_index = jnp.array([[0, 1], [0, 0]])  # Node 0 already has a self-loop
+    edge_attr = jnp.array([5.0, 6.0])
+
+    out_index, out_attr = add_self_loops(edge_index, edge_attr, fill_value=1.0, num_nodes=2)
+
+    assert jnp.array_equal(out_index, jnp.array([[0, 1, 0, 1], [0, 0, 0, 1]]))
+    assert jnp.allclose(out_attr, jnp.array([5.0, 6.0, 1.0, 1.0]))
+
+    # Node 0 carries two (0, 0) edges: the original plus the appended loop.
+    is_loop_on_zero = (out_index[0] == 0) & (out_index[1] == 0)
+    assert int(jnp.sum(is_loop_on_zero)) == 2
+
+    # ``add_remaining_self_loops`` is the de-duplicating variant.
+    remaining_index, remaining_attr = add_remaining_self_loops(
+        edge_index, edge_attr, fill_value=1.0, num_nodes=2
+    )
+    assert jnp.array_equal(remaining_index, jnp.array([[0, 1, 1], [0, 0, 1]]))
+    assert jnp.allclose(remaining_attr, jnp.array([5.0, 6.0, 1.0]))
+
+
 # TODO: The following features from PyG are not yet implemented in JraphX:
 # - contains_self_loops() function - can be implemented using simple comparison
 # - segregate_self_loops() function - would separate self-loops from other edges

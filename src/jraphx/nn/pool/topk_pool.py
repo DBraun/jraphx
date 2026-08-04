@@ -185,6 +185,10 @@ class TopKPooling(nnx.Module):
     ) -> jnp.ndarray:
         """Compute raw (pre-activation) node scores from the learnable projection.
 
+        The projection :math:`\\mathbf{X}\\mathbf{p}` is divided by :math:`\\|\\mathbf{p}\\|`
+        only when nodes are selected by ``ratio``. The ``min_score`` branch softmaxes the
+        unscaled projection, so normalizing here would change the softmax temperature.
+
         Args:
             x: Node features of shape ``[num_nodes, num_features]``.
             edge_index: Edge indices of shape ``[2, num_edges]``, unused here.
@@ -194,7 +198,10 @@ class TopKPooling(nnx.Module):
             Raw node scores of shape ``[num_nodes]``.
         """
         weight = self.weight[...]
-        return (x * weight).sum(axis=-1) / jnp.linalg.norm(weight, axis=-1)
+        scores = (x * weight).sum(axis=-1)
+        if self.min_score is None:
+            scores = scores / jnp.linalg.norm(weight, axis=-1)
+        return scores
 
     def _num_keep(self, num_nodes: int) -> int:
         """Number of nodes to keep for a graph of ``num_nodes`` nodes.

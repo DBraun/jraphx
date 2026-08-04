@@ -301,19 +301,20 @@ JraphX normalization layers (BatchNorm, LayerNorm) follow Flax NNX conventions w
 
     from jraphx.nn.norm import BatchNorm
 
-    # Create graph-aware batch normalization
-    bn = BatchNorm(in_features=64, rngs=rngs)
+    # BatchNorm pools statistics over every node of the mini-batch; use GraphNorm
+    # (or LayerNorm with mode="graph") when per-graph statistics are wanted.
+    bn = BatchNorm(num_features=64, rngs=rngs)
 
     # Training mode: model.train() causes BatchNorm to use use_running_average=False
     model.train()  # Sets training state
-    x_train = bn(x, batch=batch)  # Automatically computes batch statistics
+    x_train = bn(x)  # Automatically computes batch statistics
 
     # Evaluation mode: model.eval() causes BatchNorm to use use_running_average=True
     model.eval()   # Sets evaluation state
-    x_eval = bn(x, batch=batch)   # Automatically uses running statistics
+    x_eval = bn(x)   # Automatically uses running statistics
 
     # Manual control (overrides model state):
-    x_manual = bn(x, batch=batch, use_running_average=False)  # Force batch stats
+    x_manual = bn(x, use_running_average=False)  # Force batch stats
 
 **Common PyG datasets for JraphX:**
 

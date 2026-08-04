@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 
+import jax.numpy as jnp
 from flax import nnx
 
 from jraphx.nn.conv import GATConv, GATv2Conv, GCNConv, GINConv, MessagePassing, SAGEConv
@@ -23,13 +24,17 @@ class GCN(BasicGNN):
         num_layers: Number of GCN layers
         out_features: Size of output (if None, uses hidden_features)
         dropout_rate: Dropout probability
-        act: Activation function
+        act: Non-linear activation function, or None to disable the activation
+            entirely (default: jax.nn.relu)
         act_first: If True, apply activation before normalization
         norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
         residual: Whether to use residual connections
         improved: Use improved GCN normalization
-        cached: Cache normalized edge weights for static graphs
+        cached: Reuse a precomputed normalization for a static graph. The cache
+            of every layer must be filled eagerly with :meth:`precompute_norm`
+            before the first forward pass; a forward pass with an empty cache
+            raises RuntimeError.
         add_self_loops: Add self-loops to the graph
         normalize: Apply symmetric normalization
         rngs: Random number generators
@@ -37,6 +42,33 @@ class GCN(BasicGNN):
 
     supports_edge_weight: bool = True
     supports_edge_attr: bool = False
+
+    def precompute_norm(
+        self,
+        edge_index: jnp.ndarray,
+        edge_weight: jnp.ndarray | None = None,
+        num_nodes: int | None = None,
+        dtype: jnp.dtype | None = None,
+    ) -> None:
+        """Fill the normalization cache of every :class:`GCNConv` layer.
+
+        Only meaningful for a model built with :obj:`cached=True`. Must be
+        called eagerly, i.e. outside of any JAX transformation, since it mutates
+        module state. Afterwards the model can be called under :obj:`jax.jit` or
+        :obj:`nnx.jit` and reuses the stored normalization.
+
+        Args:
+            edge_index: Edge indices [2, num_edges]
+            edge_weight: Optional edge weights [num_edges]
+            num_nodes: Number of nodes, defaults to the largest node index in
+                ``edge_index`` plus one
+            dtype: Data type of the normalized edge weights
+
+        Raises:
+            ValueError: If the model was not built with :obj:`cached=True`.
+        """
+        for conv in self.convs:
+            conv.precompute_norm(edge_index, edge_weight, num_nodes, dtype)
 
     def init_conv(
         self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
@@ -77,7 +109,8 @@ class GAT(BasicGNN):
         concat: Whether to concatenate or average multi-head outputs
         v2: Use GATv2Conv instead of GATConv
         dropout_rate: Dropout probability
-        act: Activation function
+        act: Non-linear activation function, or None to disable the activation
+            entirely (default: jax.nn.relu)
         act_first: If True, apply activation before normalization
         norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
@@ -99,7 +132,7 @@ class GAT(BasicGNN):
         concat: bool = True,
         v2: bool = False,
         dropout_rate: float = 0.0,
-        act: Callable | None = None,
+        act: Callable | None = nnx.relu,
         act_first: bool = False,
         norm: str | None = None,
         jk: str | None = None,
@@ -178,7 +211,8 @@ class GraphSAGE(BasicGNN):
         out_features: Size of output (if None, uses hidden_features)
         aggr: Aggregation method ('mean', 'max', 'lstm')
         dropout_rate: Dropout probability
-        act: Activation function
+        act: Non-linear activation function, or None to disable the activation
+            entirely (default: jax.nn.relu)
         act_first: If True, apply activation before normalization
         norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None)
         jk: Jumping Knowledge mode ('last', 'cat', 'max', 'lstm', None)
@@ -222,7 +256,8 @@ class GIN(BasicGNN):
         num_layers: Number of GIN layers
         out_features: Size of output (if None, uses hidden_features)
         dropout_rate: Dropout probability
-        act: Activation function
+        act: Non-linear activation function, or None to disable the activation
+            entirely (default: jax.nn.relu)
         act_first: If True, apply activation before normalization
         norm: Normalization type ('batch_norm', 'layer_norm', 'graph_norm', None).
             'graph_norm' is applied between GIN blocks; the MLP inside each

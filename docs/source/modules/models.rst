@@ -179,13 +179,13 @@ MLP
       from jraphx.nn.models import MLP
       import flax.nnx as nnx
 
-      # Using channel list
+      # Using an explicit feature list
       mlp = MLP(
-          channel_list=[16, 64, 64, 32, 10],
+          feature_list=[16, 64, 64, 32, 10],
           norm="layer_norm",
           bias=True,
           dropout_rate=0.5,
-          act="relu",
+          act=nnx.relu,
           rngs=nnx.Rngs(0)
       )
 
@@ -220,7 +220,7 @@ JumpingKnowledge
       import flax.nnx as nnx
 
       # Concatenation mode
-      jk = JumpingKnowledge(mode="cat", channels=64, num_layers=3)
+      jk = JumpingKnowledge(mode="cat", num_features=64, num_layers=3)
 
       # Max pooling mode
       jk = JumpingKnowledge(mode="max")
@@ -228,7 +228,7 @@ JumpingKnowledge
       # LSTM aggregation mode
       jk = JumpingKnowledge(
           mode="lstm",
-          channels=64,
+          num_features=64,
           num_layers=3,
           rngs=nnx.Rngs(0)
       )

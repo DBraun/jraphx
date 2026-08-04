@@ -87,7 +87,9 @@ scatter_std
 
 .. autofunction:: scatter_std
 
-   Scatter standard deviation operation.
+   Scatter standard deviation operation. Bessel's correction is applied by default
+   (``unbiased=True``, dividing by ``count - 1``); pass ``unbiased=False`` for the
+   population standard deviation.
 
 scatter
 ~~~~~~~
@@ -102,7 +104,8 @@ scatter
    - **index**: Index tensor for scattering
    - **dim**: Dimension to scatter along
    - **dim_size**: Size of the output dimension
-   - **reduce**: Reduction operation ('sum', 'mean', 'max', 'min', 'mul')
+   - **reduce**: Reduction operation ('add', with 'sum' as an alias, 'mean', 'max',
+     'min'). Any other value raises a ``ValueError``.
 
 Graph Utilities
 ---------------
@@ -134,7 +137,10 @@ to_undirected
 
 .. autofunction:: to_undirected
 
-   Convert a directed graph to undirected by adding reverse edges.
+   Convert a directed graph to undirected by adding reverse edges. The result is
+   coalesced: the edge list is row-wise sorted, duplicated edges appear once, and their
+   features are merged with ``reduce``. The number of resulting edges is data-dependent,
+   so this function cannot be traced by :func:`jax.jit`.
 
    **Example:**
 
@@ -222,11 +228,13 @@ to_dense_adj
       edge_index = jnp.array([[0, 1, 2], [1, 2, 0]])
 
       # Convert to dense adjacency matrix
-      adj = to_dense_adj(edge_index, num_nodes=3)
+      adj = to_dense_adj(edge_index, max_num_nodes=3)
 
 to_edge_index
 ~~~~~~~~~~~~~
 
 .. autofunction:: to_edge_index
 
-   Convert adjacency representation to edge index format.
+   Convert adjacency representation to edge index format. Returns a
+   ``(edge_index, edge_attr)`` tuple; the stored value of every non-zero entry is always
+   returned as the edge attribute.

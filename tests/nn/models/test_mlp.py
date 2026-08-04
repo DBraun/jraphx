@@ -134,6 +134,38 @@ def test_batch(norm):
     assert output.shape == (3, 32)
 
 
+@pytest.mark.parametrize("norm", ["batch_norm", "layer_norm"])
+def test_batch_size_is_accepted_and_jittable(norm):
+    """``batch_size`` is a real forward argument and keeps the model jittable."""
+    x = jnp.array(
+        [
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+        ]
+    )
+    batch = jnp.array([0, 0, 1])
+
+    model = MLP(
+        in_features=8,
+        hidden_features=16,
+        out_features=32,
+        num_layers=2,
+        norm=norm,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model(x, batch=batch, batch_size=2)
+    assert expected.shape == (3, 32)
+    assert jnp.allclose(model(x, batch=batch), expected, atol=1e-6)
+
+    @nnx.jit
+    def forward(model, x, batch):
+        return model(x, batch=batch, batch_size=2)
+
+    assert jnp.allclose(forward(model, x, batch), expected, atol=1e-6)
+
+
 def test_mlp_properties():
     """Test MLP properties and different configurations."""
     # Test single layer

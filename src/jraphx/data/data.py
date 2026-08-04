@@ -15,7 +15,7 @@ def fields_equal(first: "Data", second: "Data") -> bool:
 
     ``flax.struct.dataclass`` regenerates ``__eq__`` for every subclass, so a
     subclass that adds fields must define ``__eq__`` in its own body and
-    delegate here to keep element-wise comparison.
+    delegate to its base class (or here) to keep element-wise comparison.
 
     Args:
         first: The left-hand operand.
@@ -49,6 +49,11 @@ class Data:
     @dataclass
     class MyData(Data):
         custom_attr: jnp.ndarray | None = None
+
+        # flax.struct.dataclass regenerates __eq__ for every subclass, so
+        # delegate to keep comparing array fields element-wise
+        def __eq__(self, other: object) -> bool:
+            return Data.__eq__(self, other)
     ```
 
     Attributes:
@@ -91,10 +96,10 @@ class Data:
         """
         if self.x is not None:
             return self.x.shape[0]
-        elif self.edge_index is not None and self.edge_index.size > 0:
-            return int(self.edge_index.max()) + 1
         elif self.pos is not None:
             return self.pos.shape[0]
+        elif self.edge_index is not None and self.edge_index.size > 0:
+            return int(self.edge_index.max()) + 1
         else:
             return 0
 

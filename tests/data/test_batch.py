@@ -18,6 +18,10 @@ class FaceData(Data):
     normal: jnp.ndarray | None = None
     label: jnp.ndarray | None = None
 
+    def __eq__(self, other: object) -> bool:
+        """Delegate to the base class so array fields compare element-wise."""
+        return Data.__eq__(self, other)
+
 
 @dataclass
 class FaceBatch(Batch):
@@ -31,6 +35,10 @@ class FaceBatch(Batch):
     ELEMENT_LEVEL_FIELDS: ClassVar[set[str]] = {"normal"}
     GRAPH_LEVEL_FIELDS: ClassVar[set[str]] = {"label"}
     _DATA_CLASS: ClassVar[type | None] = FaceData
+
+    def __eq__(self, other: object) -> bool:
+        """Delegate to the base class so array fields compare element-wise."""
+        return Batch.__eq__(self, other)
 
 
 def _graph(num_nodes: int, edges: list[list[int]]) -> Data:
@@ -71,6 +79,50 @@ class TestFromDataList:
         assert batch.x.shape == (5, 1)
         assert batch.batch.shape == (5,)
         assert batch.edge_index.shape == (2, 2)
+
+    def test_edgeless_graph_batches_next_to_edge_attr(self) -> None:
+        """edge_attr aligns with the edge axis, so an edgeless graph may omit it."""
+        with_edges = Data(
+            x=jnp.zeros((3, 1)),
+            edge_index=jnp.array([[0, 1], [1, 2]], dtype=jnp.int32),
+            edge_attr=jnp.ones((2, 1)),
+        )
+        edgeless = Data(x=jnp.zeros((2, 1)))
+        batch = Batch.from_data_list([with_edges, edgeless])
+        assert batch.edge_index.shape == (2, 2)
+        assert batch.edge_attr.shape == (2, 1)
+        assert batch.edge_attr.shape[0] == batch.edge_index.shape[1]
+
+    def test_explicitly_empty_edge_list_batches_next_to_edge_attr(self) -> None:
+        with_edges = Data(
+            x=jnp.zeros((3, 1)),
+            edge_index=jnp.array([[0, 1], [1, 2]], dtype=jnp.int32),
+            edge_attr=jnp.ones((2, 1)),
+        )
+        edgeless = Data(x=jnp.zeros((2, 1)), edge_index=jnp.zeros((2, 0), dtype=jnp.int32))
+        batch = Batch.from_data_list([with_edges, edgeless])
+        assert batch.edge_attr.shape == (2, 1)
+        assert batch.edge_attr.shape[0] == batch.edge_index.shape[1]
+
+    def test_edge_attr_missing_on_a_graph_with_edges_is_rejected(self) -> None:
+        """Omitting edge_attr while contributing edges would misalign the edge axis."""
+        with_attr = Data(
+            x=jnp.zeros((3, 1)),
+            edge_index=jnp.array([[0, 1], [1, 2]], dtype=jnp.int32),
+            edge_attr=jnp.ones((2, 1)),
+        )
+        without_attr = Data(x=jnp.zeros((2, 1)), edge_index=jnp.array([[0], [1]], dtype=jnp.int32))
+        with pytest.raises(RuntimeError, match="'edge_attr' has 0 rows on graph 1"):
+            Batch.from_data_list([with_attr, without_attr])
+
+    def test_edge_attr_row_count_must_match_edge_count(self) -> None:
+        mismatched = Data(
+            x=jnp.zeros((3, 1)),
+            edge_index=jnp.array([[0, 1], [1, 2]], dtype=jnp.int32),
+            edge_attr=jnp.ones((3, 1)),
+        )
+        with pytest.raises(RuntimeError, match="'edge_attr' has 3 rows on graph 0"):
+            Batch.from_data_list([mismatched])
 
     def test_partially_present_attribute_is_rejected(self) -> None:
         """x on only one of two graphs would misalign with the batch vector."""
@@ -215,8 +267,28 @@ class TestToDataList:
             ]
         )
         graphs = batch.to_data_list()
-        assert graphs[0].y == 0.0
-        assert graphs[1].y == 1.0
+        assert graphs[0].y.shape == (1,)
+        assert jnp.array_equal(graphs[0].y, jnp.array([0.0]))
+        assert jnp.array_equal(graphs[1].y, jnp.array([1.0]))
+
+    def test_graph_level_y_keeps_its_leading_dimension(self) -> None:
+        """A per-graph label of shape (1,) survives the round trip unchanged."""
+        originals = [
+            Data(x=jnp.zeros((3, 1)), y=jnp.array([1.0])),
+            Data(x=jnp.zeros((2, 1)), y=jnp.array([2.0])),
+        ]
+        graphs = Batch.from_data_list(originals).to_data_list()
+        assert [graph.y.shape for graph in graphs] == [(1,), (1,)]
+        assert graphs == originals
+
+    def test_graph_level_y_with_feature_dimension_keeps_its_rank(self) -> None:
+        originals = [
+            Data(x=jnp.zeros((3, 1)), y=jnp.zeros((1, 4))),
+            Data(x=jnp.zeros((2, 1)), y=jnp.ones((1, 4))),
+        ]
+        graphs = Batch.from_data_list(originals).to_data_list()
+        assert [graph.y.shape for graph in graphs] == [(1, 4), (1, 4)]
+        assert graphs == originals
 
     def test_node_level_y_is_split_by_node_mask(self) -> None:
         batch = Batch.from_data_list(
@@ -332,6 +404,27 @@ class TestSubclassBatching:
             assert jnp.array_equal(original.normal, result.normal)
             assert original.label == result.label
 
+    def test_mesh_without_faces_batches_next_to_element_attributes(self) -> None:
+        """normal aligns with the face axis, so a mesh with no faces may omit it."""
+        meshes = self._meshes()
+        meshes[1] = meshes[1].replace(face=None, normal=None)
+        batch = FaceBatch.from_data_list(meshes)
+        assert jnp.array_equal(batch.face, jnp.array([[0], [1], [2]]))
+        assert batch.normal.shape == (1, 3)
+        assert batch.normal.shape[0] == batch.face.shape[-1]
+
+    def test_element_attribute_missing_on_a_mesh_with_faces_is_rejected(self) -> None:
+        meshes = self._meshes()
+        meshes[1] = meshes[1].replace(normal=None)
+        with pytest.raises(RuntimeError, match="'normal' has 0 rows on graph 1"):
+            FaceBatch.from_data_list(meshes)
+
+    def test_element_attribute_row_count_must_match_element_count(self) -> None:
+        meshes = self._meshes()
+        meshes[0] = meshes[0].replace(normal=jnp.zeros((2, 3)))
+        with pytest.raises(RuntimeError, match="'normal' has 2 rows on graph 0"):
+            FaceBatch.from_data_list(meshes)
+
     def test_graph_level_field_must_be_present_everywhere(self) -> None:
         meshes = self._meshes()
         meshes[1] = meshes[1].replace(label=None)
@@ -357,6 +450,16 @@ class TestEquality:
     def test_round_trip_graphs_compare_equal(self) -> None:
         originals = [_graph(3, [[0, 1], [1, 2]]), _graph(2, [[0], [1]])]
         assert Batch.from_data_list(originals).to_data_list() == originals
+
+    def test_subclass_delegating_eq_compares_element_wise(self) -> None:
+        """The documented subclassing recipe keeps == working on array fields."""
+        first = FaceBatch(x=jnp.zeros((3, 2)), normal=jnp.ones((1, 3)))
+        second = FaceBatch(x=jnp.zeros((3, 2)), normal=jnp.ones((1, 3)))
+        assert first == second
+        assert first != FaceBatch(x=jnp.zeros((3, 2)), normal=jnp.zeros((1, 3)))
+        assert FaceData(x=jnp.zeros((3, 2))) == FaceData(x=jnp.zeros((3, 2)))
+        assert FaceData(x=jnp.zeros((3, 2))) != FaceData(x=jnp.ones((3, 2)))
+        assert FaceData(x=jnp.zeros((3, 2))) != Data(x=jnp.zeros((3, 2)))
 
 
 class TestRepr:

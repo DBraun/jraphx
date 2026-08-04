@@ -230,8 +230,9 @@ Here's a complete example showing how to train on multiple graphs efficiently:
 
         def loss_fn(model):
             predictions = model(batch)
-            # Global pooling to get graph-level predictions
-            graph_preds = global_mean_pool(predictions, batch.batch)
+            # Global pooling to get graph-level predictions. `size` is required
+            # here because `batch.batch` is traced inside nnx.jit.
+            graph_preds = global_mean_pool(predictions, batch.batch, size=len(graphs))
             return jnp.mean((graph_preds - targets) ** 2)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)

@@ -10,6 +10,11 @@ Global Pooling Operations
 
 Global pooling aggregates node features across entire graphs, producing graph-level representations.
 
+.. note::
+   The number of graphs is a static quantity. When ``batch`` is a traced array -- that
+   is, inside :func:`jax.jit` or :func:`jax.vmap` -- pass ``size=<num_graphs>``
+   explicitly; otherwise these functions raise a :obj:`ValueError`.
+
 global_add_pool
 ~~~~~~~~~~~~~~~
 
@@ -106,10 +111,10 @@ TopKPooling
 
       # Select top 50% of nodes
       pool = TopKPooling(
-          in_features=64,
+          num_features=64,
           ratio=0.5,
           min_score=None,  # Optional minimum score threshold
-          multiplier=1.0,  # Score multiplier
+          multiplier=1.0,  # Post-pooling coefficient
           rngs=nnx.Rngs(0)
       )
 
@@ -122,9 +127,17 @@ TopKPooling
 
    **Parameters Explained:**
 
-   - **ratio**: If < 1, fraction of nodes to keep; if >= 1, exact number of nodes
+   - **ratio**: Interpreted by type. A :obj:`float` keeps ``ceil(ratio * N_i)`` nodes of
+     every graph :math:`i`, clamped to ``N_i``; an :obj:`int` keeps exactly that many
+     nodes per graph. ``ratio=0.5`` keeps half of each graph, ``ratio=2`` keeps two
+     nodes per graph, and ``ratio=2.0`` keeps every node.
    - **min_score**: Minimum score threshold (nodes below are filtered)
-   - **multiplier**: Multiply scores before selection (affects gradients)
+   - **multiplier**: Coefficient applied to the pooled features after the score gate.
+     It does not influence which nodes are selected.
+
+   .. note::
+      The number of selected nodes depends on the data, so these layers cannot be
+      traced by :func:`jax.jit` or :func:`jax.vmap`.
 
 SAGPooling
 ~~~~~~~~~~
@@ -151,7 +164,7 @@ SAGPooling
 
       # SAGPooling with GCN scoring
       pool = SAGPooling(
-          in_features=64,
+          num_features=64,
           ratio=0.5,
           gnn="gcn",  # Options: "gcn", "gat", "sage"
           min_score=None,
@@ -165,7 +178,7 @@ SAGPooling
 
       # Using GAT for attention-based scoring
       pool_gat = SAGPooling(
-          in_features=64,
+          num_features=64,
           ratio=0.3,
           gnn="gat",
           rngs=nnx.Rngs(0)

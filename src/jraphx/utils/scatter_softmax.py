@@ -119,6 +119,10 @@ def scatter_log_softmax(
     This is numerically more stable than log(softmax(x)) and is useful
     for computing cross-entropy losses in attention mechanisms.
 
+    Groups whose entries are all :obj:`-inf` (the masked-attention idiom)
+    produce :obj:`-inf` rather than NaN, so exponentiating the result
+    reproduces the zeros returned by :func:`scatter_softmax`.
+
     Args:
         src: Source tensor with values to apply log-softmax to
         index: Indices determining which group each value belongs to
@@ -171,8 +175,15 @@ def _scatter_log_softmax(
     # Use logsumexp for numerical stability
     logsumexp_vals = scatter_logsumexp(src, index, dim_size, dim)
 
+    # A fully masked group has a logsumexp of -inf, and every one of its entries
+    # is -inf too; subtracting zero instead avoids -inf - (-inf) = NaN and leaves
+    # the group at -inf, whose exponential is the zero produced by scatter_softmax.
+    shift = jnp.where(
+        jnp.isneginf(logsumexp_vals), jnp.zeros((), logsumexp_vals.dtype), logsumexp_vals
+    )
+
     # log_softmax = x - logsumexp(x)
-    log_softmax_vals = src - logsumexp_vals[index]
+    log_softmax_vals = src - shift[index]
 
     return log_softmax_vals
 

@@ -6,6 +6,7 @@ from jax import numpy as jnp
 from jax import random
 
 from jraphx.nn.conv import SAGEConv
+from jraphx.utils.scatter import scatter_mean
 
 
 @pytest.mark.parametrize("root_weight", [False, True])
@@ -54,6 +55,32 @@ def test_sage_conv_bipartite():
     out2 = conv((x1, x2), edge_index)
     assert out2.shape == (2, 32)
     assert jnp.allclose(out1, out2)
+
+
+def test_sage_conv_bipartite_without_target_features():
+    """``(x_src, None)`` aggregates into a target set as large as the source set."""
+    conv = SAGEConv((8, 16), 32, rngs=nnx.Rngs(0))
+    x_src = random.normal(random.key(7), (4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    out = conv((x_src, None), edge_index)
+
+    assert out.shape == (4, 32)
+
+    # Mean aggregation of the transformed source features, without root features
+    expected = scatter_mean(conv.lin(x_src)[edge_index[0]], edge_index[1], 4, dim=0)
+    assert jnp.allclose(out, expected, atol=1e-5)
+
+
+def test_sage_conv_bipartite_without_target_features_explicit_size():
+    """An explicit ``size`` still fixes the target set when ``x_dst`` is None."""
+    conv = SAGEConv((8, 16), 32, rngs=nnx.Rngs(0))
+    x_src = jnp.ones((4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    out = conv((x_src, None), edge_index, size=(4, 2))
+
+    assert out.shape == (2, 32)
 
 
 def test_sage_conv_lazy():

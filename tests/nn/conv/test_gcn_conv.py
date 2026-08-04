@@ -244,6 +244,101 @@ def test_gcn_norm_isolated_node_gets_zero_weight():
     assert jnp.allclose(out_weight, jnp.zeros(1))
 
 
+def test_gcn_norm_does_not_duplicate_existing_self_loops():
+    """An existing self-loop keeps its weight and enters the degree only once."""
+    conv = GCNConv(3, 3, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1, 1], [1, 0, 1]])
+    edge_weight = jnp.array([2.0, 2.0, 5.0])
+
+    out_index, out_weight = conv.gcn_norm(
+        edge_index=edge_index,
+        edge_weight=edge_weight,
+        num_nodes=2,
+    )
+
+    # Exactly one effective loop per node: the pre-existing entry is zeroed and
+    # its weight of 5.0 moves to the appended loop of node 1.
+    is_loop = out_index[0] == out_index[1]
+    assert int(jnp.sum(jnp.abs(out_weight[is_loop]) > 0)) == 2
+
+    # Weighted in-degrees are [2 + 1, 2 + 5], as in torch_geometric's gcn_norm
+    deg_inv_sqrt = jnp.array([3.0, 7.0]) ** (-0.5)
+    expected = jnp.array(
+        [
+            deg_inv_sqrt[0] * 2.0 * deg_inv_sqrt[1],
+            deg_inv_sqrt[1] * 2.0 * deg_inv_sqrt[0],
+            0.0,
+            deg_inv_sqrt[0] * 1.0 * deg_inv_sqrt[0],
+            deg_inv_sqrt[1] * 5.0 * deg_inv_sqrt[1],
+        ]
+    )
+    assert jnp.allclose(out_weight, expected, atol=1e-6)
+    # Pinned against torch_geometric's gcn_norm for the same inputs
+    assert jnp.allclose(
+        out_weight[out_weight > 0],
+        jnp.array([0.436436, 0.436436, 0.333333, 0.714286]),
+        atol=1e-5,
+    )
+
+
+def test_gcn_norm_improved_keeps_existing_self_loop_weight():
+    """With improved=True only nodes without a loop receive the fill value 2.0."""
+    conv = GCNConv(3, 3, improved=True, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1, 1], [1, 0, 1]])
+    edge_weight = jnp.array([2.0, 2.0, 5.0])
+
+    out_index, out_weight = conv.gcn_norm(
+        edge_index=edge_index,
+        edge_weight=edge_weight,
+        num_nodes=2,
+        improved=True,
+    )
+
+    # Degrees are [2 + 2, 2 + 5]: node 0 gets the fill value, node 1 keeps 5.0
+    deg_inv_sqrt = jnp.array([4.0, 7.0]) ** (-0.5)
+    expected = jnp.array(
+        [
+            deg_inv_sqrt[0] * 2.0 * deg_inv_sqrt[1],
+            deg_inv_sqrt[1] * 2.0 * deg_inv_sqrt[0],
+            0.0,
+            deg_inv_sqrt[0] * 2.0 * deg_inv_sqrt[0],
+            deg_inv_sqrt[1] * 5.0 * deg_inv_sqrt[1],
+        ]
+    )
+    assert jnp.allclose(out_weight, expected, atol=1e-6)
+    assert out_index.shape == (2, 5)
+
+
+def test_gcn_norm_is_jittable_with_existing_self_loops():
+    """Self-loop insertion keeps a static shape, so gcn_norm stays traceable."""
+    conv = GCNConv(3, 3, rngs=nnx.Rngs(0))
+    edge_index = jnp.array([[0, 1, 1], [1, 0, 1]])
+    edge_weight = jnp.array([2.0, 2.0, 5.0])
+
+    jitted = jax.jit(lambda ei, ew: conv.gcn_norm(ei, ew, 2))
+    jit_index, jit_weight = jitted(edge_index, edge_weight)
+    eager_index, eager_weight = conv.gcn_norm(edge_index, edge_weight, 2)
+
+    assert jnp.array_equal(jit_index, eager_index)
+    assert jnp.allclose(jit_weight, eager_weight, atol=1e-6)
+
+
+def test_gcn_conv_unit_self_loop_is_a_no_op():
+    """Adding a unit-weight self-loop to the input cannot change the output."""
+    x = random.normal(random.key(3), (4, 3))
+    edge_index = jnp.array([[0, 1, 1, 2, 3], [1, 0, 2, 1, 0]])
+    edge_weight = jnp.array([2.0, 2.0, 0.5, 0.5, 3.0])
+
+    looped_index = jnp.concatenate([edge_index, jnp.array([[2], [2]])], axis=1)
+    looped_weight = jnp.concatenate([edge_weight, jnp.array([1.0])])
+
+    conv = GCNConv(3, 2, rngs=nnx.Rngs(0))
+    out = conv(x, edge_index, edge_weight)
+    out_looped = conv(x, looped_index, looped_weight)
+
+    assert jnp.allclose(out, out_looped, atol=1e-5)
+
+
 def test_gcn_conv_bias_is_constant_offset():
     """The bias must be a per-row constant, not scaled by the aggregation."""
     x = random.normal(random.key(0), (4, 3))

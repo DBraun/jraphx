@@ -57,6 +57,35 @@ class FusedMP(MessagePassing):
         return jnp.full((dim_size, x.shape[-1]), 7.0)
 
 
+class RawArgsFusedMP(MessagePassing):
+    """Probe that checks what the fused hook is handed and what happens after."""
+
+    def __init__(self):
+        super().__init__(aggr="add")
+        self.x_was_tuple = False
+        self.num_source_rows = 0
+        self.edge_index_shape = ()
+
+    def message_and_aggregate(
+        self,
+        x: jnp.ndarray | tuple[jnp.ndarray, jnp.ndarray],
+        edge_index: jnp.ndarray,
+        edge_attr: jnp.ndarray | None = None,
+        dim_size: int | None = None,
+    ) -> jnp.ndarray:
+        """Scatter the source rows of ``x`` into the target set of ``edge_index``."""
+        x_src = x[0] if isinstance(x, tuple) else x
+        self.x_was_tuple = isinstance(x, tuple)
+        self.num_source_rows = x_src.shape[0]
+        self.edge_index_shape = edge_index.shape
+        out = jnp.zeros((dim_size, x_src.shape[-1]), dtype=x_src.dtype)
+        return out.at[edge_index[1]].add(x_src[edge_index[0]])
+
+    def update(self, aggr_out: jnp.ndarray, x: jnp.ndarray | None = None) -> jnp.ndarray:
+        """Offset the fused result to show that :meth:`update` still runs."""
+        return aggr_out + 1.0
+
+
 class CountingMLP(nnx.Module):
     """Linear layer that records how many times it has been applied."""
 
@@ -203,6 +232,22 @@ def test_overridden_message_and_aggregate_is_dispatched():
 
     assert out.shape == (3, 2)
     assert jnp.allclose(out, 7.0)
+
+
+def test_fused_hook_receives_raw_arguments_and_feeds_update():
+    """The fused hook gets ``x`` and ``edge_index`` untouched, source table first."""
+    conv = RawArgsFusedMP()
+    x_src = jnp.array([[1.0], [2.0], [3.0]])
+    x_dst = jnp.zeros((2, 1))
+    edge_index = jnp.array([[0, 1, 2], [0, 1, 1]])
+
+    out = conv.propagate(edge_index, (x_src, x_dst))
+
+    assert conv.x_was_tuple
+    assert conv.num_source_rows == 3
+    assert conv.edge_index_shape == (2, 3)
+    # Aggregated [[1], [5]], then offset by the overridden update()
+    assert jnp.allclose(out, jnp.array([[2.0], [6.0]]))
 
 
 def test_propagate_rejects_out_of_range_bipartite_indices():

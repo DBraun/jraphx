@@ -285,6 +285,51 @@ def test_empty_graphs_pool_to_zero():
     assert jnp.allclose(out_min[0], jnp.array([1.0, 2.0]))
 
 
+def test_pooling_keeps_rank_for_1d_node_features():
+    """A scalar feature per node pools to one scalar per graph, not to a matrix."""
+    x = jnp.array([5.0, 3.0, 1.0, 2.0])
+    batch = jnp.array([0, 0, 2, 2])
+
+    out_add = global_add_pool(x, batch, size=3)
+    out_mean = global_mean_pool(x, batch, size=3)
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert out_add.shape == (3,)
+    assert out_mean.shape == (3,)
+    assert out_max.shape == (3,)
+    assert out_min.shape == (3,)
+
+    assert jnp.allclose(out_add, jnp.array([8.0, 0.0, 3.0]))
+    assert jnp.allclose(out_mean, jnp.array([4.0, 0.0, 1.5]))
+    assert jnp.allclose(out_max, jnp.array([5.0, 0.0, 2.0]))
+    assert jnp.allclose(out_min, jnp.array([3.0, 0.0, 1.0]))
+
+
+def test_pooling_supports_extra_feature_axes():
+    """Node features with several feature axes keep their trailing shape when pooled."""
+    x = jnp.arange(24, dtype=jnp.float32).reshape(4, 2, 3)
+    batch = jnp.array([0, 0, 2, 2])
+    zeros = jnp.zeros((2, 3))
+
+    out_mean = global_mean_pool(x, batch, size=3)
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert out_mean.shape == (3, 2, 3)
+    assert out_max.shape == (3, 2, 3)
+    assert out_min.shape == (3, 2, 3)
+
+    assert jnp.allclose(out_mean[0], x[:2].mean(axis=0))
+    assert jnp.allclose(out_max[0], x[:2].max(axis=0))
+    assert jnp.allclose(out_min[2], x[2:].min(axis=0))
+
+    # The empty graph pools to zeros rather than to the reduction identity.
+    assert jnp.allclose(out_mean[1], zeros)
+    assert jnp.allclose(out_max[1], zeros)
+    assert jnp.allclose(out_min[1], zeros)
+
+
 def test_infinite_inputs_are_preserved():
     """Non-empty graphs keep genuinely infinite node features."""
     x = jnp.array([[jnp.inf, 1.0], [2.0, -jnp.inf]])
