@@ -94,6 +94,16 @@ Checkpoints written by 0.0.4 are not loadable as-is:
 * ``BatchNorm`` stores ``running_mean``, ``running_var`` and ``num_batches_tracked`` as
   ``nnx.BatchStat`` instead of ``nnx.Variable``, so ``nnx.split`` and
   ``nnx.state(..., nnx.Param)`` partition them differently.
+* Layers that support dropout always hold a ``Dropout`` submodule; a rate of
+  :obj:`0.0` makes it return its input untouched without drawing a key, rather than
+  the layer holding :obj:`None`. Every such module therefore carries dropout
+  ``RngState`` even at rate 0, so ``jax.grad`` over an unfiltered ``nnx.split(model)``
+  now fails on the integer RNG counters. Split the parameters out first::
+
+      graphdef, params, rest = nnx.split(model, nnx.Param, ...)
+
+  Parameter initialization is unchanged: the ``Dropout`` is constructed after the
+  layers that draw parameter keys.
 
 **Breaking Changes -- Numerics**
 

@@ -89,13 +89,6 @@ class BasicGNN(nnx.Module):
         else:
             self.out_features = hidden_features
 
-        # Create dropout
-        self.dropout: nnx.Dropout | None
-        if dropout_rate > 0:
-            self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-        else:
-            self.dropout = None
-
         # Create convolution layers
         self.convs: nnx.List[MessagePassing] = nnx.List([])
         if num_layers >= 1:
@@ -166,6 +159,11 @@ class BasicGNN(nnx.Module):
             self.lin = nnx.Linear(jk_features, self.out_features, rngs=rngs)
         else:
             self.lin = None
+
+        # A rate of 0 makes Dropout return its input untouched, without drawing a
+        # key, so there is nothing to gain from omitting the layer. Built last so
+        # that forking the dropout stream cannot shift parameter initialization.
+        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
     def init_conv(
         self,
@@ -263,8 +261,7 @@ class BasicGNN(nnx.Module):
                     x = self.act(x)
 
                 # Dropout
-                if self.dropout is not None:
-                    x = self.dropout(x)
+                x = self.dropout(x)
 
                 # Store for JumpingKnowledge
                 if self.jk is not None:

@@ -443,9 +443,10 @@ def test_gin_inner_mlp_configuration():
         rngs=nnx.Rngs(42),
     )
 
-    # Dropout is applied once per block, by the model and not by the inner MLP
-    assert model.dropout is not None
-    assert model.convs[0].nn.dropout is None
+    # Dropout is applied once per block, by the model and not by the inner MLP.
+    # Every module owns a Dropout layer; a rate of 0 is what makes it inert.
+    assert model.dropout.rate == 0.5
+    assert model.convs[0].nn.dropout.rate == 0.0
 
     # GraphNorm is applied between blocks; the inner MLP normalizes per node
     assert type(model.norms[0]).__name__ == "GraphNorm"

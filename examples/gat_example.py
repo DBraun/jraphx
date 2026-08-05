@@ -288,23 +288,23 @@ def demo_residual_connections():
         out = model(x, edge_index)
         return jnp.mean(out**2)
 
-    # Compute gradients
-    graphdef_no_res, state_no_res = nnx.split(model_no_res)
-    graphdef_with_res, state_with_res = nnx.split(model_with_res)
-    graphdef_with_norm, state_with_norm = nnx.split(model_with_norm)
+    # Compute gradients. Split the parameters away from the rest of the state:
+    # a module also carries non-differentiable state such as dropout RNG counters,
+    # which are integers and cannot be differentiated.
+    def compute_grad_norm(model):
+        graphdef, params, rest = nnx.split(model, nnx.Param, ...)
 
-    def compute_grad_norm(graphdef, state):
-        def stateful_loss(state):
-            model = nnx.merge(graphdef, state)
-            return loss_fn(model, data.x, data.edge_index)
+        def stateful_loss(params):
+            merged = nnx.merge(graphdef, params, rest)
+            return loss_fn(merged, data.x, data.edge_index)
 
-        _, grads = jax.value_and_grad(stateful_loss)(state)
+        _, grads = jax.value_and_grad(stateful_loss)(params)
         grad_norm = jax.tree.map(lambda g: jnp.linalg.norm(g), grads)
         return jax.tree.reduce(lambda x, y: x + y, grad_norm)
 
-    grad_norm_no_res = compute_grad_norm(graphdef_no_res, state_no_res)
-    grad_norm_with_res = compute_grad_norm(graphdef_with_res, state_with_res)
-    grad_norm_with_norm = compute_grad_norm(graphdef_with_norm, state_with_norm)
+    grad_norm_no_res = compute_grad_norm(model_no_res)
+    grad_norm_with_res = compute_grad_norm(model_with_res)
+    grad_norm_with_norm = compute_grad_norm(model_with_norm)
 
     print(f"\nGradient norm without residual: {grad_norm_no_res:.6f}")
     print(f"Gradient norm with residual: {grad_norm_with_res:.6f}")

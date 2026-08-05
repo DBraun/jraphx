@@ -151,12 +151,9 @@ class MLP(nnx.Module):
                 norm_layer = None
             self.norms.append(norm_layer)
 
-        # Create dropout
-        self.dropout: nnx.Dropout | None
-        if dropout_rate > 0:
-            self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-        else:
-            self.dropout = None
+        # A rate of 0 makes Dropout return its input untouched, without drawing a
+        # key, so there is nothing to gain from omitting the layer.
+        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
     @property
     def in_features(self) -> int:
@@ -217,8 +214,7 @@ class MLP(nnx.Module):
                     x = self.act(x)
 
                 # Dropout (not on last layer if plain_last)
-                if self.dropout is not None:
-                    if i < self.num_layers - 1 or not self.plain_last:
-                        x = self.dropout(x)
+                if i < self.num_layers - 1 or not self.plain_last:
+                    x = self.dropout(x)
 
         return x

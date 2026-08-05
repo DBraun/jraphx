@@ -286,8 +286,7 @@ class TransformerConv(MessagePassing):
         alpha = scatter_softmax(alpha, index, dim=0, dim_size=size_i)
 
         # Apply dropout
-        if self.dropout_rate > 0:
-            alpha = self.dropout(alpha)
+        alpha = self.dropout(alpha)
 
         # Weight values by attention
         out = value_j * alpha.reshape(-1, H, 1)

@@ -200,12 +200,9 @@ class GATv2Conv(MessagePassing):
         else:
             self.bias = nnx.data(None)
 
-        # Dropout
-        self.dropout: Dropout | None
-        if dropout > 0:
-            self.dropout = Dropout(dropout, rngs=rngs)
-        else:
-            self.dropout = None
+        # A rate of 0 makes Dropout return its input untouched, without drawing a
+        # key, so there is nothing to gain from omitting the layer.
+        self.dropout = Dropout(dropout, rngs=rngs)
 
     @overload
     def __call__(
@@ -306,8 +303,7 @@ class GATv2Conv(MessagePassing):
         alpha = scatter_softmax(alpha, col, dim_size=num_nodes)  # [num_edges, heads]
 
         # Apply dropout to attention coefficients
-        if self.dropout is not None:
-            alpha = self.dropout(alpha)
+        alpha = self.dropout(alpha)
 
         # Apply attention weights to features
         weighted_features = x_j * alpha.reshape(
