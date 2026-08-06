@@ -137,11 +137,17 @@ class DynamicEdgeConv(Module):
             Updated node features [num_nodes, out_features]
         """
         if knn_indices is not None:
-            # Convert k-NN indices to edge_index format
+            # Convert k-NN indices to edge_index format. Row 0 holds the neighbour
+            # and row 1 the querying node, so that `propagate` aggregates at the
+            # node whose neighbourhood was searched. Emitting the rows the other
+            # way round would build the *reverse* k-NN graph: since "j is among
+            # i's k nearest" is not a symmetric relation, each node would then
+            # aggregate over the nodes that selected it, and a node selected by
+            # nobody would receive no messages at all.
             num_nodes = x.shape[0]
-            sources = jnp.repeat(jnp.arange(num_nodes), self.k)
-            targets = knn_indices.flatten()
-            edge_index = jnp.stack([sources, targets])
+            queries = jnp.repeat(jnp.arange(num_nodes), self.k)
+            neighbors = knn_indices.flatten()
+            edge_index = jnp.stack([neighbors, queries])
         elif edge_index is None:
             raise ValueError(
                 "Either edge_index or knn_indices must be provided. "

@@ -10,7 +10,57 @@ import jax.numpy as jnp
 from flax.nnx import Module
 from jax.core import Tracer
 
+from jraphx.utils.loop import add_self_loops
 from jraphx.utils.scatter import scatter_add, scatter_max, scatter_mean, scatter_min
+
+
+def _add_attention_self_loops(
+    edge_index: jnp.ndarray,
+    edge_attr: jnp.ndarray | None,
+    fill_value: Union[float, str],
+    num_src_nodes: int,
+    num_dst_nodes: int,
+) -> tuple[jnp.ndarray, jnp.ndarray | None, jnp.ndarray]:
+    r"""Insert one self-loop per node and flag the loops that were already present.
+
+    Attention layers make every node attend to itself by appending a loop
+    :math:`(i, i)` for each node. Two details are easy to get wrong:
+
+    * A loop only exists for a node present in *both* endpoint tables, so on a
+      bipartite graph the loop count is ``min(num_src_nodes, num_dst_nodes)``.
+      Sizing it from the target count alone appends loops whose source index is
+      out of range, and :func:`jax.numpy.take` clamps such reads to the last row
+      rather than raising.
+    * A node that arrives with a self-loop must not end up with two, or its
+      self-attention mass is counted twice and its real neighbours are
+      correspondingly down-weighted. Dropping the duplicate column would make the
+      edge count data-dependent and break :obj:`jax.jit`, so it is reported back
+      instead; the caller drives its attention logit to :math:`-\infty`, which is
+      exactly a softmax weight of zero.
+
+    Args:
+        edge_index: Edge indices [2, num_edges].
+        edge_attr: Optional edge features, extended with one row per loop.
+        fill_value: Feature value given to the appended loops.
+        num_src_nodes: Number of rows of the source node table.
+        num_dst_nodes: Number of rows of the target node table.
+
+    Returns:
+        Tuple of (edge_index with loops, edge_attr with loops, boolean mask that is
+        :obj:`True` on the columns whose attention must be neutralised).
+
+    .. note::
+        A string ``fill_value`` reduces over the original edges, which still
+        include any pre-existing self-loop. PyG drops that loop before reducing,
+        so the generated loop features differ in that corner.
+    """
+    num_loops = min(num_src_nodes, num_dst_nodes)
+    duplicate = edge_index[0] == edge_index[1]
+    edge_index, edge_attr = add_self_loops(
+        edge_index, edge_attr=edge_attr, fill_value=fill_value, num_nodes=num_loops
+    )
+    mask = jnp.concatenate([duplicate, jnp.zeros(num_loops, dtype=bool)])
+    return edge_index, edge_attr, mask
 
 
 def _validate_index_range(index: jnp.ndarray, num_nodes: int, role: str) -> None:

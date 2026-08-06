@@ -9,6 +9,10 @@ description = "Graph Neural Networks with JAX/NNX"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+# NOTICE carries the MIT permission notice for the PyTorch Geometric code and
+# docstrings this library derives from. Listing it explicitly keeps it in the wheel
+# and the sdist rather than relying on setuptools' default glob.
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "JraphX Contributors"},
 ]

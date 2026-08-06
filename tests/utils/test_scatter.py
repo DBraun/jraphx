@@ -327,3 +327,55 @@ if __name__ == "__main__":
     test_scatter_consistency()
     test_scatter_single_element()
     print("All scatter tests passed!")
+
+
+def test_scatter_mean_does_not_saturate_in_low_precision():
+    """The mean of a large segment must survive a low-precision input dtype.
+
+    bfloat16 carries 8 mantissa bits, so its consecutive integers stop at 256: 256 + 1
+    rounds straight back to 256. Accumulating either the running total or the member
+    count in the input dtype therefore freezes both partway through a high-degree node,
+    and the quotient comes out wrong by a degree-dependent factor with no warning.
+    """
+    num_members = 600
+    values = (jnp.arange(num_members, dtype=jnp.float32) % 7) + 1.0
+    index = jnp.zeros(num_members, dtype=jnp.int32)
+    reference = float(values.mean())
+
+    for dtype in (jnp.bfloat16, jnp.float16):
+        src = values.astype(dtype).reshape(-1, 1)
+        out = scatter_mean(src, index, dim_size=1)
+
+        # The caller's dtype is preserved, so the tolerance is set by its storage
+        # precision rather than by the accumulation
+        assert out.dtype == dtype
+        assert abs(float(out[0, 0]) - reference) < 0.05 * reference
+
+    # float32 is exact to within rounding
+    out_f32 = scatter_mean(values.reshape(-1, 1), index, dim_size=1)
+    assert out_f32.dtype == jnp.float32
+    assert jnp.allclose(out_f32[0, 0], reference, atol=1e-5)
+
+
+def test_scatter_std_does_not_saturate_in_low_precision():
+    """The same widening has to cover the deviation, which divides by a count too."""
+    num_members = 600
+    values = (jnp.arange(num_members, dtype=jnp.float32) % 7) + 1.0
+    index = jnp.zeros(num_members, dtype=jnp.int32)
+    reference = float(values.std(ddof=1))
+
+    src = values.astype(jnp.bfloat16).reshape(-1, 1)
+    out = scatter_std(src, index, dim_size=1)
+
+    assert out.dtype == jnp.bfloat16
+    assert abs(float(out[0, 0]) - reference) < 0.05 * reference
+
+
+def test_scatter_mean_promotes_integer_input_to_float():
+    """An integer input still divides to a float, as `jnp.true_divide` would."""
+    src = jnp.array([[1], [3], [5]], dtype=jnp.int32)
+    index = jnp.zeros(3, dtype=jnp.int32)
+    out = scatter_mean(src, index, dim_size=1)
+
+    assert jnp.issubdtype(out.dtype, jnp.floating)
+    assert jnp.allclose(out[0, 0], 3.0)

@@ -267,8 +267,20 @@ def example_3_temporal_graph_networks():
 
 
 def example_4_memory_efficient_training():
-    """Example 4: Memory-efficient training with scan over mini-batches."""
-    print("Example 4: Memory-efficient training with scan")
+    """Example 4: Memory-efficient training over mini-batches.
+
+    Only one mini-batch is materialized at a time: :obj:`jax.vmap` parallelizes the
+    graphs inside a mini-batch, while the mini-batches themselves are stepped through
+    one by one.
+
+    Deliberately *not* wrapped in :obj:`nnx.scan`. A module passed to
+    :obj:`nnx.scan` with ``in_axes=None`` is a broadcast input, and Flax discards
+    mutations to broadcast state, so an ``optimizer.update`` inside the scan body is a
+    silent no-op: the loss is identical on every epoch and no parameter ever moves.
+    :obj:`nnx.scan` is the right tool for a stack of *layers*, as in example 2, where
+    the scanned state is the activation rather than the optimizer.
+    """
+    print("Example 4: Memory-efficient training over mini-batches")
     print("-" * 40)
 
     class TrainableGNN(nnx.Module):
@@ -302,29 +314,35 @@ def example_4_memory_efficient_training():
     sample_edge = all_edges[0, 0]
     print(nnx.tabulate(model, sample_x, sample_edge, depth=1))
 
+    def loss_fn(model, x_batch, edge_batch, y_batch):
+        # Process graphs in parallel within batch
+        preds = jax.vmap(model)(x_batch, edge_batch)
+        return jnp.mean((preds - y_batch) ** 2)
+
     @nnx.jit
+    def train_step(model, optimizer, x_batch, edge_batch, y_batch):
+        """One mini-batch: compute the gradient and apply it."""
+        batch_loss, grads = nnx.value_and_grad(loss_fn)(model, x_batch, edge_batch, y_batch)
+        optimizer.update(model, grads)
+        return batch_loss
+
     def train_epoch(model, optimizer, all_x, all_edges, all_y):
-        """Train over all mini-batches using scan for memory efficiency."""
-
-        def loss_fn(model, x_batch, edge_batch, y_batch):
-            # Process graphs in parallel within batch
-            preds = jax.vmap(model)(x_batch, edge_batch)
-            return jnp.mean((preds - y_batch) ** 2)
-
-        # Scan over mini-batches to accumulate loss and update model
-        @nnx.scan(in_axes=(None, None, nnx.Carry, 0, 0, 0), out_axes=nnx.Carry)
-        def train_step(model, optimizer, total_loss, x_batch, edge_batch, y_batch):
-            batch_loss, grads = nnx.value_and_grad(loss_fn)(model, x_batch, edge_batch, y_batch)
-            optimizer.update(model, grads)
-            return total_loss + batch_loss
-
-        total_loss = train_step(model, optimizer, 0.0, all_x, all_edges, all_y)
+        """Step through the mini-batches, holding only one at a time."""
+        total_loss = 0.0
+        for i in range(num_minibatches):
+            total_loss += train_step(model, optimizer, all_x[i], all_edges[i], all_y[i])
         return total_loss / num_minibatches
 
-    # Train for one epoch
-    avg_loss = train_epoch(model, optimizer, all_x, all_edges, all_y)
+    # Train for a few epochs and confirm the model is actually learning
+    losses = [float(train_epoch(model, optimizer, all_x, all_edges, all_y)) for _ in range(3)]
 
-    print(f"\nAverage loss: {avg_loss:.4f}")
+    for epoch, epoch_loss in enumerate(losses):
+        print(f"Epoch {epoch}: average loss {epoch_loss:.4f}")
+    if losses[-1] >= losses[0]:
+        raise RuntimeError(
+            f"training did not reduce the loss ({losses[0]:.4f} -> {losses[-1]:.4f}); "
+            "the parameter update is not taking effect"
+        )
     print(f"Processed {num_minibatches} mini-batches with {graphs_per_batch} graphs each")
     print()
 

@@ -241,7 +241,7 @@ JAX-Specific Optimizations
     import jax
 
     # JIT compile for speed
-    @jax.jit
+    @nnx.jit
     def fast_gnn_inference(model, x, edge_index):
         return model(x, edge_index)
 
@@ -254,7 +254,10 @@ JAX-Specific Optimizations
     import optax
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
-    @jax.jit
+    # `nnx.jit`, not `jax.jit`: under plain `jax.jit` the parameter update is traced on
+    # a copy of the state and silently discarded, so the loss never moves. See
+    # :doc:`/advanced/jit`.
+    @nnx.jit
     def train_step(model, optimizer, data, targets):
         def loss_fn(model):
             preds = model(data.x, data.edge_index)

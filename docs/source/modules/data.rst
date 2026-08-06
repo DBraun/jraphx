@@ -158,9 +158,13 @@ The Data subclass will have easy-to-understand additional fields. The correspond
         normal: jnp.ndarray | None = None
         face_color: jnp.ndarray | None = None
 
-        # Configure batching behavior as class attributes
+        # Configure batching behavior as class attributes. Only `normal` and
+        # `face_color` are element-level: they have one row per *face*, so they align
+        # with the `face` index field. `pos` has one row per *vertex* and is already
+        # handled as node-level data, so listing it here would make batching demand
+        # one row of `pos` per face and raise a RuntimeError.
         NODE_INDEX_FIELDS = {'face'}
-        ELEMENT_LEVEL_FIELDS = {'normal', 'face_color', 'pos'}
+        ELEMENT_LEVEL_FIELDS = {'normal', 'face_color'}
         _DATA_CLASS = FaceData  # Link for unbatching
 
         def __repr__(self) -> str:
@@ -229,9 +233,13 @@ Example: Molecular Graphs
         atom_charge: jnp.ndarray | None = None
         mol_weight: jnp.ndarray | None = None
 
-        # Configure batching behavior as class attributes
+        # Configure batching behavior as class attributes. `bond_type` is element-level
+        # -- one row per bond, aligned with `bond_index`. `atom_charge` has one row per
+        # *atom*, so it is node-level and must not be listed here: a molecule generally
+        # has a different number of atoms than bonds, and the element-level check would
+        # raise a RuntimeError. Left uncategorized, it still collates correctly.
         NODE_INDEX_FIELDS = {'bond_index'}
-        ELEMENT_LEVEL_FIELDS = {'bond_type', 'atom_charge'}
+        ELEMENT_LEVEL_FIELDS = {'bond_type'}
         GRAPH_LEVEL_FIELDS = {'mol_weight'}  # Per-molecule property
         _DATA_CLASS = MolecularData  # Link for unbatching
 
@@ -295,6 +303,20 @@ When converting from PyTorch Geometric datasets, create a custom Data class:
             edge_attr=jnp.array(pyg_data.edge_attr.numpy())
                 if hasattr(pyg_data, 'edge_attr') else None
         )
+
+.. warning::
+
+    :meth:`~jraphx.data.Batch.from_data_list` collates an uncategorized field such as
+    ``train_mask`` correctly -- it concatenates along axis 0, which is right for
+    node-level data -- but :meth:`~jraphx.data.Batch.to_data_list` only rebuilds the
+    fields it recognizes: ``x``, ``pos``, ``edge_index``, ``edge_attr``, ``y``, and
+    whatever is named in ``NODE_INDEX_FIELDS``, ``ELEMENT_LEVEL_FIELDS`` or
+    ``GRAPH_LEVEL_FIELDS``. Anything else comes back as :obj:`None`, so the round trip
+    is not the identity for the masks above.
+
+    Batching and training are unaffected -- read the masks off the batch
+    (``batch.train_mask``), which is the usual pattern anyway. Only unbatching loses
+    them. If you need the round trip, index the batch yourself using ``batch.ptr``.
 
 Common Patterns
 ---------------

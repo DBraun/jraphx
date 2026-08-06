@@ -413,16 +413,20 @@ def batch_histogram(
     for feat_idx in range(num_features):
         feature_vals = x[:, feat_idx]
 
-        # Digitize values
-        bin_indices = jnp.searchsorted(bin_edges[:-1], feature_vals)
+        # Digitize values. Searching the full edge array from the right and stepping
+        # back one puts `v` in the bin whose half-open interval contains it, matching
+        # :func:`numpy.histogram`; the clip folds `v == hi` into the last bin, which
+        # is closed on the right, and guards values outside an explicit range.
+        bin_indices = jnp.searchsorted(bin_edges, feature_vals, side="right") - 1
         bin_indices = jnp.clip(bin_indices, 0, bins - 1)
 
         # Create combined indices for 2D histogram
         combined_idx = batch * bins + bin_indices
 
-        # Count occurrences
+        # Count occurrences in float32, so the tally stays exact for a low-precision
+        # `x` whose accumulator would otherwise saturate
         hist = segment_sum(
-            jnp.ones_like(feature_vals),
+            jnp.ones_like(feature_vals, dtype=jnp.float32),
             combined_idx,
             num_segments=batch_size * bins,
         ).reshape(batch_size, bins)

@@ -6,9 +6,12 @@ from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers
 from jax import numpy as jnp
 
-from jraphx.nn.conv.message_passing import MessagePassing
+from jraphx.nn.conv.message_passing import (
+    MessagePassing,
+    _add_attention_self_loops,
+    _validate_index_range,
+)
 from jraphx.utils import scatter_add, scatter_softmax
-from jraphx.utils.loop import add_self_loops as add_self_loops_fn
 
 
 class GATConv(MessagePassing):
@@ -289,14 +292,24 @@ class GATConv(MessagePassing):
             x = x.reshape(-1, self.heads, self.out_features)
             x_src = x_dst = x
 
-        # Add self-loops
+        # Add self-loops, remembering which loops the input already carried
+        duplicate_loops = None
         if self._add_self_loops:
-            edge_index, edge_attr = add_self_loops_fn(
-                edge_index, edge_attr=edge_attr, fill_value=self.fill_value, num_nodes=num_nodes
+            edge_index, edge_attr, duplicate_loops = _add_attention_self_loops(
+                edge_index,
+                edge_attr,
+                self.fill_value,
+                num_src_nodes=x_src.shape[0],
+                num_dst_nodes=num_nodes,
             )
 
         # Compute attention scores
         row, col = edge_index[0], edge_index[1]
+
+        # This layer builds its own gathers rather than going through `propagate`,
+        # so it has to police the index range itself
+        _validate_index_range(row, x_src.shape[0], "Source")
+        _validate_index_range(col, num_nodes, "Target")
 
         # Get source and target features for edges
         x_i = x_dst[col] if x_dst is not None else x_src[col]  # [num_edges, heads, out_features]
@@ -320,6 +333,11 @@ class GATConv(MessagePassing):
 
         # Apply LeakyReLU
         alpha = jnp.where(alpha > 0, alpha, alpha * self.negative_slope)
+
+        # Neutralise the self-loops the input already had; the loop appended above is
+        # the one that counts, so these must not contribute a second time
+        if duplicate_loops is not None:
+            alpha = jnp.where(duplicate_loops[:, None], -jnp.inf, alpha)
 
         # Softmax over each target node's incoming edges, independently per head
         alpha = scatter_softmax(alpha, col, dim_size=num_nodes)  # [num_edges, heads]

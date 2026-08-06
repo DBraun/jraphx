@@ -183,11 +183,16 @@ Quick Examples
 .. code-block:: python
 
     import jax
+    from jraphx.utils import add_self_loops
 
+    # `jax.jit` is fine here: this function only reads arrays and mutates no module
+    # state. Anything that updates parameters needs `nnx.jit` instead -- see
+    # :doc:`/advanced/jit`.
     @jax.jit
     def process_graph(data):
-        from jraphx.utils import add_self_loops
-        edge_index, _ = add_self_loops(data.edge_index, data.x.shape[0])
+        # `num_nodes` is keyword-only in effect: the second positional parameter of
+        # `add_self_loops` is `edge_attr`
+        edge_index, _ = add_self_loops(data.edge_index, num_nodes=data.x.shape[0])
         return edge_index
 
     processed = process_graph(data)
@@ -248,6 +253,8 @@ You can easily use PyTorch Geometric datasets with **JraphX** by converting the 
 
 .. code-block:: python
 
+    from functools import partial
+
     import jax
     import optax
     from flax import nnx
@@ -265,13 +272,15 @@ You can easily use PyTorch Geometric datasets with **JraphX** by converting the 
 
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
-    @jax.jit
-    def train_step(model, optimizer, batch, targets):
+    # `nnx.jit`, not `jax.jit`: the parameter update has to survive the boundary.
+    # `num_graphs` is static because pooling needs its segment count at trace time.
+    @partial(nnx.jit, static_argnames=("num_graphs",))
+    def train_step(model, optimizer, batch, targets, num_graphs):
         def loss_fn(model):
-            # Node-level predictions
-            node_predictions = model(batch)
+            # Node-level predictions; models take arrays, not a Data/Batch object
+            node_predictions = model(batch.x, batch.edge_index)
             # Pool to graph-level
-            graph_predictions = global_mean_pool(node_predictions, batch.batch)
+            graph_predictions = global_mean_pool(node_predictions, batch.batch, size=num_graphs)
             # Compute loss
             return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(
                 graph_predictions, targets
@@ -289,7 +298,7 @@ You can easily use PyTorch Geometric datasets with **JraphX** by converting the 
         batch = Batch.from_data_list(batch_graphs)
         targets = jnp.array([dataset[i].y.item() for i in indices])
 
-        loss = train_step(model, optimizer, batch, targets)
+        loss = train_step(model, optimizer, batch, targets, batch.num_graphs)
         if epoch % 20 == 0:
             print(f'Epoch {epoch}, Loss: {loss:.4f}')
 

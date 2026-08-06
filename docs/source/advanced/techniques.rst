@@ -84,21 +84,52 @@ Process multiple graphs in parallel using JAX's ``vmap``:
 
 .. code-block:: python
 
+``vmap`` needs every graph to have the same shape, so the graphs have to be padded to a
+common size first. JraphX ships no padding helper; the graphs are stacked explicitly:
+
+.. code-block:: python
+
    import jax
-   from jraphx.data.vmap_batch import pad_graph_data
+   import jax.numpy as jnp
+   from flax import nnx
 
-   def process_single_graph(data, model):
-       """Process a single graph."""
-       return model(data.x, data.edge_index)
+   def pad_graph(data, max_nodes, max_edges):
+       """Pad one graph to a fixed node and edge count.
 
-   # Vectorize over a batch of graphs
-   process_batch = nnx.vmap(process_single_graph, in_axes=(0, None))
+       Padding edges with the self-loop (0, 0) keeps every index in range. Give the
+       padded rows zero weight, or mask them downstream, so they cannot contribute.
+       """
+       num_nodes, num_features = data.x.shape
+       x = jnp.zeros((max_nodes, num_features), dtype=data.x.dtype)
+       x = x.at[:num_nodes].set(data.x)
 
-   # Pad graphs to same size for vmap
-   padded_graphs = pad_graph_data(graph_list, max_nodes=100, max_edges=200)
+       edge_index = jnp.zeros((2, max_edges), dtype=data.edge_index.dtype)
+       num_edges = data.edge_index.shape[1]
+       edge_index = edge_index.at[:, :num_edges].set(data.edge_index)
+
+       edge_mask = jnp.arange(max_edges) < num_edges
+       node_mask = jnp.arange(max_nodes) < num_nodes
+       return x, edge_index, node_mask, edge_mask
+
+   # Stack the padded graphs into leading-axis batches
+   padded = [pad_graph(g, max_nodes=100, max_edges=200) for g in graph_list]
+   x_batch = jnp.stack([p[0] for p in padded])
+   edge_index_batch = jnp.stack([p[1] for p in padded])
+   node_mask_batch = jnp.stack([p[2] for p in padded])
+
+   def process_single_graph(model, x, edge_index, node_mask):
+       """Process a single graph, zeroing the padded nodes."""
+       return model(x, edge_index) * node_mask[:, None]
+
+   # Vectorize over the batch, holding the model fixed
+   process_batch = nnx.vmap(process_single_graph, in_axes=(None, 0, 0, 0))
 
    # Process all graphs in parallel
-   outputs = process_batch(padded_graphs, model)
+   outputs = process_batch(model, x_batch, edge_index_batch, node_mask_batch)
+
+For variable-size graphs, :class:`~jraphx.data.Batch` is usually the better tool: it
+concatenates graphs into one disjoint graph and needs no padding at all. See
+:doc:`/advanced/batching`.
 
 Custom vmap Patterns
 ~~~~~~~~~~~~~~~~~~~~
@@ -144,25 +175,29 @@ Implementing Edge-Conditioned Convolutions
                nnx.Linear(out_features, out_features, rngs=rngs)
            )
 
-       def message(self, x_i, x_j, edge_attr):
+       # `message` is called positionally as `message(x_j, x_i, edge_attr)`, so the
+       # first parameter is the *source* endpoint. Naming it `x_i` would bind the
+       # source features to a parameter called "target".
+       def message(self, x_j, x_i=None, edge_attr=None):
            # Concatenate source, target, and edge features
-           msg = jnp.concatenate([x_i, x_j, edge_attr], axis=-1)
+           msg = jnp.concatenate([x_j, x_i, edge_attr], axis=-1)
            return self.node_mlp(msg)
 
        def __call__(self, x, edge_index, edge_attr):
-           return self.propagate(
-               edge_index, x=x, edge_attr=edge_attr
-           )
+           return self.propagate(edge_index, x, edge_attr)
 
 Implementing Attention Mechanisms
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
+   import jax.numpy as jnp
+   from jraphx.utils import scatter_add, scatter_softmax
+
    class CustomAttentionConv(MessagePassing):
        """Custom attention-based message passing."""
 
-       def __init__(self, in_features, out_features, heads=4, rngs=None):
+       def __init__(self, in_features, out_features, heads=4, *, rngs: nnx.Rngs):
            super().__init__(aggr='add')
            self.heads = heads
            self.out_features = out_features
@@ -171,18 +206,24 @@ Implementing Attention Mechanisms
            self.W_k = nnx.Linear(in_features, heads * out_features, rngs=rngs)
            self.W_v = nnx.Linear(in_features, heads * out_features, rngs=rngs)
 
-       def message(self, x_i, x_j, edge_index_i, size_i):
-           # Multi-head attention
-           Q = self.W_q(x_i).reshape(-1, self.heads, self.out_features)
-           K = self.W_k(x_j).reshape(-1, self.heads, self.out_features)
-           V = self.W_v(x_j).reshape(-1, self.heads, self.out_features)
+       def __call__(self, x, edge_index):
+           # The attention weights have to be normalized per target node, which needs
+           # the target index. `message` only receives the gathered endpoints, so the
+           # attention is computed here rather than inside `message`.
+           row, col = edge_index[0], edge_index[1]
+           num_nodes = x.shape[0]
 
-           # Compute attention scores
+           Q = self.W_q(x)[col].reshape(-1, self.heads, self.out_features)
+           K = self.W_k(x)[row].reshape(-1, self.heads, self.out_features)
+           V = self.W_v(x)[row].reshape(-1, self.heads, self.out_features)
+
+           # Compute attention scores, normalized over each target's incoming edges
            scores = (Q * K).sum(axis=-1) / jnp.sqrt(self.out_features)
-           alpha = nnx.softmax(scores, axis=0)
+           alpha = scatter_softmax(scores, col, dim_size=num_nodes)
 
-           # Apply attention to values
-           return (alpha[..., None] * V).reshape(-1, self.heads * self.out_features)
+           # Apply attention to values and aggregate at the target nodes
+           messages = (alpha[..., None] * V).reshape(-1, self.heads * self.out_features)
+           return scatter_add(messages, col, dim_size=num_nodes)
 
 Performance Optimization
 ------------------------
@@ -281,7 +322,7 @@ Data Parallel Training
 .. code-block:: python
 
    import jax
-   from jax import pmap
+   from flax import nnx
 
    def distributed_train_step(model, optimizer, batch):
        """Single training step for data parallel training."""
@@ -294,13 +335,20 @@ Data Parallel Training
        loss, grads = nnx.value_and_grad(loss_fn)(model)
 
        # Average gradients across devices
-       grads = jax.tree_map(lambda x: jax.lax.pmean(x, 'batch'), grads)
+       grads = jax.tree.map(lambda x: jax.lax.pmean(x, 'batch'), grads)
 
        optimizer.update(model, grads)
        return loss
 
-   # Parallelize across devices
-   parallel_train_step = pmap(distributed_train_step, axis_name='batch')
+   # Parallelize across devices. `nnx.pmap`, not `jax.pmap`: this step mutates the
+   # parameters, and a plain `jax.pmap` would trace that update on a copy of the state
+   # and drop it on return -- see :doc:`/advanced/jit`.
+   parallel_train_step = nnx.pmap(distributed_train_step, axis_name='batch')
+
+Data parallelism here means splitting a batch of **whole graphs** across devices. Each
+device must hold complete graphs: slicing one graph's nodes across devices while its
+edges still carry global node ids gives out-of-range gathers and lost messages, with no
+error to warn you.
 
 Model Parallel GNNs
 ~~~~~~~~~~~~~~~~~~~

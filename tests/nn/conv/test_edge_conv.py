@@ -257,6 +257,33 @@ def test_dynamic_edge_conv_basic():
     assert out.shape == (8, 32)
 
 
+def test_dynamic_edge_conv_aggregates_over_own_neighbors():
+    """Each node's output must depend on the nodes *it* selected as neighbours.
+
+    A k-NN relation is not symmetric, so emitting ``edge_index`` with the query in row 0
+    would build the reverse graph: every node would aggregate over the nodes that picked
+    it instead of over its own neighbours. Perturbing a node's own neighbour must move
+    its output, and perturbing a non-neighbour must not.
+    """
+    # Node 0 -> 1, node 1 -> 2, node 2 -> 0. Node 0's neighbour is 1, and node 0 is
+    # node 2's neighbour, so the two orientations are distinguishable.
+    knn_indices = jnp.array([[1], [2], [0]])
+    x = jnp.array([[0.0, 0.0], [1.0, 0.0], [5.0, 0.0]])
+
+    conv = DynamicEdgeConv(nnx.Linear(4, 2, rngs=nnx.Rngs(1)), k=1)
+    baseline = conv(x, knn_indices=knn_indices)
+
+    moved_neighbor = conv(x.at[1].set(jnp.array([9.0, 9.0])), knn_indices=knn_indices)
+    moved_other = conv(x.at[2].set(jnp.array([9.0, 9.0])), knn_indices=knn_indices)
+
+    assert not jnp.allclose(baseline[0], moved_neighbor[0])
+    assert jnp.allclose(baseline[0], moved_other[0])
+
+    # With the correct orientation every node has exactly k incoming edges, so no row
+    # can be left empty by max aggregation
+    assert not jnp.allclose(baseline, 0.0)
+
+
 def test_dynamic_edge_conv_error():
     """Test DynamicEdgeConv error handling."""
     x = random.normal(random.key(42), (4, 16))

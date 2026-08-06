@@ -142,6 +142,46 @@ Trained weights still load (subject to the state-layout notes above), but output
   previously divided by :math:`\lVert p \rVert` first, which rescaled the logits and
   collapsed the gate to nearly one-hot at initialization. The ``ratio`` path is
   unchanged and still normalizes by :math:`\lVert p \rVert`.
+* ``SAGEConv`` applies its neighbour transform *after* aggregation, as
+  :math:`\mathbf{W}_2 \cdot \mathrm{aggr}_j \mathbf{x}_j`. Only ``aggr="max"`` changes:
+  an elementwise maximum does not commute with a linear map, so the previous ordering
+  computed :math:`\max_j (\mathbf{W}_2 \mathbf{x}_j)` -- a maximum taken in the output
+  space, mixing columns drawn from different source nodes. ``aggr="mean"``/``"gcn"`` are
+  unaffected, since sum and mean do commute.
+* ``DynamicEdgeConv`` builds the k-NN ``edge_index`` with the neighbour as source and the
+  querying node as target, so a node aggregates over the neighbours *it* selected. The
+  rows were previously the other way round, which built the reverse k-NN graph: because
+  "j is among i's k nearest" is not symmetric, every node aggregated over the nodes that
+  had selected it, and a node selected by nobody received no messages at all and
+  max-aggregated to a zero row. Every ported DGCNN model changes.
+* ``GATConv``/``GATv2Conv`` no longer count a pre-existing self-loop twice. PyG removes
+  self-loops before inserting its own; without that removal a node arriving with a loop
+  got two, roughly doubling its self-attention mass and correspondingly down-weighting
+  its real neighbours. Dropping the duplicate column would make the edge count
+  data-dependent and break :obj:`jax.jit`, so its attention logit is driven to
+  :math:`-\infty` instead, which is exactly a softmax weight of zero. The duplicate row
+  stays in the ``edge_index`` returned by ``return_attention_weights=True``, carrying a
+  weight of zero. With a string ``fill_value`` the generated loop features still reduce
+  over a set that includes the original loop, which PyG excludes.
+* ``GATConv``/``GATv2Conv`` size their self-loop set from
+  ``min(num_src_nodes, num_dst_nodes)`` on a bipartite graph, matching PyG: a self-loop
+  only exists for a node present in both endpoint tables. Sizing it from the target count
+  alone appended loops whose source index was out of range, and :func:`jax.numpy.take`
+  clamps such a read to the last row rather than raising -- several target nodes received
+  the same fabricated message, and a target with no incoming edge acquired a value. Both
+  layers now also validate their gather indices and raise :obj:`IndexError`, which
+  ``propagate`` already did for the layers that route through it.
+* ``scatter_mean``, ``scatter_std``, ``segment_mean``, ``GraphNorm`` and
+  ``LayerNorm(mode="graph")`` accumulate both their running total and their member count
+  in at least float32, never in a narrower input dtype. bfloat16 carries 8 mantissa bits,
+  so its consecutive integers stop at 256 -- ``256 + 1`` rounds back to 256 -- and both
+  accumulators froze partway through any segment larger than that, leaving the quotient
+  wrong by a degree-dependent factor. The caller's dtype is still what comes back.
+* ``batch_histogram`` assigns each value to the bin whose interval contains it, matching
+  :func:`numpy.histogram`. It previously searched only the *left* edges and from the
+  left, which pushed every value strictly inside a bin one place to the right, left bin 0
+  collecting only values exactly equal to the lower bound, and made the last bin absorb
+  the overflow.
 
 **Bug Fixes**
 
@@ -183,6 +223,31 @@ Trained weights still load (subject to the state-layout notes above), but output
   ``variable[...]`` for array-valued ``nnx.Variable`` objects and
   ``variable.get_value()``/``variable.set_value(x)`` for variables that may hold
   :obj:`None`.
+* A ``NOTICE`` file collects the third-party notices the project's own README already
+  claimed, including the MIT permission notice for the PyTorch Geometric code and
+  docstrings this library derives from. It is listed in ``license-files``, so it ships in
+  both the wheel and the sdist.
+* Documentation corrections. Three pages taught a training step wrapped in
+  :func:`jax.jit`, where the parameter update is traced on a copy of the module state and
+  silently discarded -- no error, a plausible loss, and not one parameter moved. They now
+  use :func:`nnx.jit`, and :doc:`/advanced/jit` explains when each is appropriate. The
+  ``MessagePassing`` prose described PyG's ``propagate(**kwargs)`` and ``_i``/``_j``
+  argument lifting, neither of which JraphX implements: ``message`` is dispatched
+  positionally, so a signature written ``message(self, x_i, x_j)`` binds the *source*
+  features to ``x_i``. Two shipped examples did exactly that. Also fixed: the two
+  ``Batch``-subclass recipes, which listed node-level fields as ``ELEMENT_LEVEL_FIELDS``
+  and raised; a ``BatchNorm(affine=True)`` snippet, since the argument is spelled
+  ``use_scale``/``use_bias``; a reference to a ``jraphx.data.vmap_batch`` module that does
+  not exist; and a call to the removed ``jax.tree_map``.
+* Example corrections. ``examples/gcn_jraphx.py`` and ``examples/gcn_standalone.py``
+  sharded one graph's nodes against a slice of its edges under ``shard_map``, so edges
+  carrying global node ids gathered out of range and every message crossing a device
+  boundary was dropped -- silently, producing plausible but wrong losses and accuracies.
+  Both now shard whole graphs, and the sharded result matches the unsharded one exactly.
+  ``examples/nnx_transforms.py`` passed its model and optimizer to ``nnx.scan`` as
+  broadcast inputs, whose mutations Flax discards, so its "memory-efficient training"
+  never updated a parameter; it now steps through the mini-batches and asserts that the
+  loss falls.
 
 Version 0.0.4
 -------------

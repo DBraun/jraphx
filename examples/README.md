@@ -8,7 +8,9 @@ This directory contains examples demonstrating how to use JraphX for graph neura
 
 - **`gcn_jraphx.py`** - Graph Convolutional Network using JraphX's built-in layers
   - Demonstrates basic GCN usage with synthetic data
-  - Shows data parallelism using `nnx.shard_map` across multiple devices
+  - Shows data parallelism using `nnx.shard_map`, sharding whole graphs across devices
+    (each device holds complete graphs; slicing one graph's nodes across devices would
+    silently drop the messages that cross the split)
   - Uses JraphX's `Data` structure for graph representation (node features, edges, labels, etc.)
 
 - **`gcn_standalone.py`** - Standalone GCN implementation from scratch

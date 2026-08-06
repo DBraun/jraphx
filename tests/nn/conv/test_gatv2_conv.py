@@ -121,3 +121,41 @@ def test_gatv2_conv_empty_edges():
 
     conv = GATv2Conv(8, 32, heads=2, rngs=nnx.Rngs(0))
     assert conv(x, edge_index).shape == (4, 64)
+
+
+def test_gatv2_conv_does_not_duplicate_existing_self_loops():
+    """A pre-existing self-loop must not be counted twice in the attention softmax.
+
+    PyG removes self-loops before inserting its own; see the GATConv counterpart.
+    """
+    x = jnp.arange(6, dtype=jnp.float32).reshape(3, 2)
+    with_loop = jnp.array([[0, 1, 0], [0, 0, 1]])  # (0, 0) already present
+    without_loop = jnp.array([[1, 0], [0, 1]])  # same graph, loop removed
+
+    conv = GATv2Conv(2, 2, heads=1, rngs=nnx.Rngs(0))
+    assert jnp.allclose(conv(x, with_loop), conv(x, without_loop), atol=1e-6)
+
+
+def test_gatv2_conv_bipartite_self_loops_use_the_smaller_node_count():
+    """Self-loops only exist for nodes present in both endpoint tables."""
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    edge_index = jnp.array([[0, 1], [0, 3]])
+
+    conv = GATv2Conv((2, 2), 3, heads=1, bias=False, rngs=nnx.Rngs(0))
+    out = conv((x_src, x_dst), edge_index)
+
+    assert out.shape == (4, 3)
+    assert bool(jnp.isfinite(out).all())
+    assert jnp.allclose(out[2], 0.0)
+    assert not jnp.allclose(out[1], out[2])
+
+
+def test_gatv2_conv_rejects_out_of_range_source_index():
+    """An index genuinely past the source table must raise, not silently clamp."""
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    conv = GATv2Conv((2, 2), 3, heads=1, rngs=nnx.Rngs(0))
+
+    with pytest.raises(IndexError, match="Source indices"):
+        conv((x_src, x_dst), jnp.array([[0, 7], [0, 3]]))

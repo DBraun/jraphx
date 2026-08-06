@@ -71,15 +71,22 @@ class GraphNorm(nnx.Module):
         elif batch_size is None:
             batch_size = int(batch.max()) + 1
 
-        # Node counts per graph; empty graphs are clamped to avoid a 0/0 mean.
+        # Per-graph statistics are accumulated in at least float32, never in a
+        # narrower `x.dtype`: bfloat16 has 8 mantissa bits, so its consecutive
+        # integers stop at 256 and both the node count and the running total freeze
+        # there, skewing every graph with more nodes than that by a size-dependent
+        # factor. Empty graphs are clamped to avoid a 0/0 mean.
+        accum_dtype = jnp.promote_types(x.dtype, jnp.float32)
+        widened = x.astype(accum_dtype)
         counts = jax.ops.segment_sum(
-            jnp.ones(batch.shape[0], dtype=x.dtype), batch, num_segments=batch_size
+            jnp.ones(batch.shape[0], dtype=accum_dtype), batch, num_segments=batch_size
         )
         counts = jnp.maximum(counts, 1.0)[:, None]
 
-        mean = jax.ops.segment_sum(x, batch, num_segments=batch_size) / counts
-        out = x - self.mean_scale[...] * mean[batch]
+        mean = jax.ops.segment_sum(widened, batch, num_segments=batch_size) / counts
+        out = widened - self.mean_scale[...] * mean[batch]
         var = jax.ops.segment_sum(out**2, batch, num_segments=batch_size) / counts
         std = jnp.sqrt(var[batch] + self.eps)
 
-        return self.weight[...] * out / std + self.bias[...]
+        normalized = self.weight[...] * out / std + self.bias[...]
+        return normalized.astype(x.dtype)

@@ -19,20 +19,28 @@ All **JraphX** models support :obj:`@nnx.jit` compilation for optimal performanc
     from jraphx.nn.models import GCN
     from jraphx.data import Data
 
-    # Create model and data
-    model = GCN(16, 32, 7, num_layers=2, rngs=nnx.Rngs(42))
+    # Create model and data. Pass the feature sizes by keyword: `num_layers` is the
+    # third positional parameter, so `GCN(16, 32, 7, num_layers=2)` would supply it
+    # twice and raise a TypeError.
+    model = GCN(
+        in_features=16,
+        hidden_features=32,
+        out_features=7,
+        num_layers=2,
+        rngs=nnx.Rngs(42),
+    )
     data = Data(
         x=jnp.ones((100, 16)),
         edge_index=jnp.array([[0, 1], [1, 0]])
     )
 
-    # JIT compile for faster execution
+    # JIT compile for faster execution. Models take arrays, not a Data object.
     @nnx.jit
-    def predict(model, data):
-        return model(data)
+    def predict(model, x, edge_index):
+        return model(x, edge_index)
 
     # First call compiles, subsequent calls are fast
-    predictions = predict(model, data)
+    predictions = predict(model, data.x, data.edge_index)
 
 Vectorization with vmap
 -----------------------
@@ -49,14 +57,15 @@ Process multiple graphs efficiently using :obj:`nnx.vmap`:
         Data(x=jnp.ones((15, 16)), edge_index=jnp.array([[0, 1], [1, 2]])),
     ]
 
-    # For fixed-size graphs, use vmap directly
-    @nnx.vmap
-    def batch_predict(data):
-        return model(data)
+    # For fixed-size graphs, use vmap directly over stacked arrays
+    @nnx.vmap(in_axes=(None, 0, 0))
+    def batch_predict(model, x, edge_index):
+        return model(x, edge_index)
 
-    # For variable-size graphs, use Batch
+    # For variable-size graphs, use Batch: it concatenates the graphs into one
+    # disjoint graph, so the ordinary forward pass handles it
     batch = Batch.from_data_list(graphs)
-    batch_predictions = predict(model, batch)
+    batch_predictions = predict(model, batch.x, batch.edge_index)
 
 Training with NNX
 -----------------
@@ -72,9 +81,9 @@ Training with NNX
 
     # Training step with JIT compilation
     @nnx.jit
-    def train_step(model, optimizer, data, targets):
+    def train_step(model, optimizer, x, edge_index, targets):
         def loss_fn(model):
-            predictions = model(data)
+            predictions = model(x, edge_index)
             return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(
                 predictions, targets
             ))
@@ -83,10 +92,10 @@ Training with NNX
         optimizer.update(model, grads)
         return loss
 
-    # Train for several epochs
-    targets = jnp.array([0, 1, 0, 1, 2])  # Node labels
+    # One label per node, so the graph's 100 nodes need 100 targets
+    targets = jnp.arange(100) % 7
     for epoch in range(100):
-        loss = train_step(model, optimizer, data, targets)
+        loss = train_step(model, optimizer, data.x, data.edge_index, targets)
         if epoch % 20 == 0:
             print(f'Epoch {epoch}, Loss: {loss:.4f}')
 
@@ -155,7 +164,7 @@ Use :obj:`nnx.scan` for memory-efficient processing of deep networks:
 
     # Create and use deep network
     deep_model = DeepGNN(16, 64, 7, 10, rngs=nnx.Rngs(42))
-    deep_predictions = deep_model(data)
+    deep_predictions = deep_model(data.x, data.edge_index)
 
 Random Number Generation with Flax NNX
 ------------------------------------------
@@ -202,10 +211,14 @@ Here's a complete example showing how to train on multiple graphs efficiently:
 
 .. code-block:: python
 
+    from functools import partial
+
     import jax
     import jax.numpy as jnp
+    import optax
     from flax import nnx
     from jraphx.data import Data, Batch
+    from jraphx.nn.models import GCN
     from jraphx.nn.pool import global_mean_pool
 
     # Create multiple training graphs using new Rngs shorthand methods
@@ -223,16 +236,16 @@ Here's a complete example showing how to train on multiple graphs efficiently:
         ])
         train_graphs.append(Data(x=x, edge_index=edge_index))
 
-    # Batch training function
-    @nnx.jit
-    def train_on_batch(model, optimizer, graphs, targets):
-        batch = Batch.from_data_list(graphs)
-
+    # Batch training function. Collation is host-side Python work, so the Batch is
+    # built outside the compiled step and only arrays cross the boundary.
+    # `num_graphs` is static because pooling needs its segment count at trace time.
+    @partial(nnx.jit, static_argnames=("num_graphs",))
+    def train_on_batch(model, optimizer, batch, targets, num_graphs):
         def loss_fn(model):
-            predictions = model(batch)
+            predictions = model(batch.x, batch.edge_index)
             # Global pooling to get graph-level predictions. `size` is required
             # here because `batch.batch` is traced inside nnx.jit.
-            graph_preds = global_mean_pool(predictions, batch.batch, size=len(graphs))
+            graph_preds = global_mean_pool(predictions, batch.batch, size=num_graphs)
             return jnp.mean((graph_preds - targets) ** 2)
 
         loss, grads = nnx.value_and_grad(loss_fn)(model)
@@ -241,15 +254,22 @@ Here's a complete example showing how to train on multiple graphs efficiently:
 
     # Training loop
     model_rngs = nnx.Rngs(42)  # For model initialization
-    model = GCN(16, 32, 7, rngs=model_rngs)
+    model = GCN(
+        in_features=16, hidden_features=32, out_features=7, num_layers=2, rngs=model_rngs
+    )
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
+    # Collate the batch and draw its targets once, outside the loop. Re-drawing the
+    # targets every epoch would give the model a different objective each step, and the
+    # loss would wander instead of falling.
     target_rngs = nnx.Rngs(100)  # Separate Rngs for targets
-    for epoch in range(50):
-        # Sample batch of graphs
-        batch_graphs = train_graphs[:32]  # Batch size 32
-        batch_targets = target_rngs.normal((32, 7))  # Shorthand method!
+    batch_graphs = train_graphs[:32]  # Batch size 32
+    batch = Batch.from_data_list(batch_graphs)
+    batch_targets = target_rngs.normal((len(batch_graphs), 7))  # Shorthand method!
 
-        loss = train_on_batch(model, optimizer, batch_graphs, batch_targets)
+    for epoch in range(50):
+        loss = train_on_batch(
+            model, optimizer, batch, batch_targets, len(batch_graphs)
+        )
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Loss: {loss:.4f}')

@@ -161,19 +161,25 @@ class LayerNorm(nnx.Module):
             num_features = math.prod(x.shape[1:])
             broadcast_shape = (-1,) + (1,) * (x.ndim - 1)
 
+            # Accumulated in at least float32, never in a narrower `x.dtype`:
+            # bfloat16 has 8 mantissa bits, so its consecutive integers stop at 256
+            # and both the element count and the running total freeze there, skewing
+            # every graph larger than that by a size-dependent factor.
+            accum_dtype = jnp.promote_types(x.dtype, jnp.float32)
+            widened = x.astype(accum_dtype)
             counts = jax.ops.segment_sum(
-                jnp.ones(batch.shape[0], dtype=x.dtype), batch, num_segments=batch_size
+                jnp.ones(batch.shape[0], dtype=accum_dtype), batch, num_segments=batch_size
             )
             # Elements per graph; empty graphs are clamped to avoid a 0/0 mean.
             denom = jnp.maximum(counts, 1.0) * num_features
 
             graph_mean = (
-                jax.ops.segment_sum(x.sum(axis=feature_axes), batch, num_segments=batch_size)
+                jax.ops.segment_sum(widened.sum(axis=feature_axes), batch, num_segments=batch_size)
                 / denom
             )
             mean = graph_mean[batch].reshape(broadcast_shape)
 
-            centered = x - mean
+            centered = widened - mean
             graph_var = (
                 jax.ops.segment_sum(
                     (centered**2).sum(axis=feature_axes), batch, num_segments=batch_size
@@ -195,8 +201,11 @@ class LayerNorm(nnx.Module):
             if self.bias is not None:
                 x_norm = x_norm + self.bias[...]
 
-        # Apply dtype conversion if specified
+        # Graph mode widens its accumulators, so hand the caller's own dtype back
+        # unless an explicit output dtype was requested
         if self.dtype is not None:
             x_norm = x_norm.astype(self.dtype)
+        else:
+            x_norm = x_norm.astype(x.dtype)
 
         return x_norm

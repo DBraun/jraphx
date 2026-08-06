@@ -17,14 +17,12 @@ class SAGEConv(MessagePassing):
         \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
         \mathrm{mean}_{j \in \mathcal{N(i)}} \mathbf{x}_j
 
-    If :obj:`project = True`, then :math:`\mathbf{x}_j` will first get
-    projected via
-
-    .. math::
-        \mathbf{x}_j \leftarrow \sigma ( \mathbf{W}_3 \mathbf{x}_j +
-        \mathbf{b})
-
-    as described in Eq. (3) of the paper.
+    The neighbour transformation :math:`\mathbf{W}_2` is applied to the
+    *aggregated* neighbourhood, as the equation above shows. This is what the
+    :obj:`aggr="max"` variant needs: an elementwise maximum does not commute
+    with a linear map, so aggregating in the input space is the difference
+    between :math:`\mathbf{W}_2 (\max_j \mathbf{x}_j)` and the wrong
+    :math:`\max_j (\mathbf{W}_2 \mathbf{x}_j)`.
 
     Args:
         in_features (int or tuple): Size of each input sample, or tuple for
@@ -169,12 +167,12 @@ class SAGEConv(MessagePassing):
             # Propagate (includes self-loops by default in GCN)
             out = self.propagate(edge_index, x_src, edge_attr, size)
         else:
-            # Standard GraphSAGE aggregation
-            # Transform neighbor features
-            x_j = self.lin(x_src)
-
-            # Aggregate neighbor features
-            out = self.propagate(edge_index, x_j, edge_attr, size)
+            # Aggregate the raw source features, then transform. The order is not
+            # arbitrary: `aggr="max"` does not commute with `self.lin`, so mapping
+            # first would compute an elementwise maximum in the *output* space and
+            # mix columns drawn from different source nodes.
+            out = self.propagate(edge_index, x_src, edge_attr, size)
+            out = self.lin(out)
 
             # Add transformed root features
             if self.lin_r is not None and x_dst is not None:
@@ -197,12 +195,12 @@ class SAGEConv(MessagePassing):
         """Construct messages from source nodes.
 
         Args:
-            x_j: Source node features [num_edges, out_features]
+            x_j: Source node features [num_edges, in_features]
             x_i: Target node features (not used)
             edge_attr: Edge features (not used)
 
         Returns:
-            Messages [num_edges, out_features]
+            Messages [num_edges, in_features]
         """
         return x_j
 

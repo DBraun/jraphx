@@ -130,4 +130,5 @@ JraphX is released under the Apache License 2.0 (see [LICENSE](LICENSE)).
 
 It contains substantial portions of code and documentation derived from PyTorch Geometric
 (MIT License, Copyright (c) 2023 PyG Team), and builds on Flax and DeepMind's jraph, both licensed
-under the Apache License 2.0.
+under the Apache License 2.0. The required third-party notices, including the MIT permission
+notice, are collected in [NOTICE](NOTICE) and ship with every wheel and source distribution.

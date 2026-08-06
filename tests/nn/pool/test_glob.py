@@ -5,9 +5,11 @@ Converted from PyTorch Geometric test_glob.py to test JraphX functionality.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from jraphx.nn.pool.glob import (
+    batch_histogram,
     batched_global_add_pool,
     batched_global_max_pool,
     batched_global_mean_pool,
@@ -385,6 +387,42 @@ def test_batched_pooling_with_size():
     assert jnp.allclose(out_add[0, 0], x[0, :2].sum(axis=0))
     assert jnp.allclose(out_mean[1, 1], x[1, 1:].mean(axis=0))
     assert jnp.allclose(out_max[0, 1], x[0, 2:].max(axis=0))
+
+
+def test_batch_histogram_bins_match_numpy():
+    """Each value must land in the bin whose interval contains it.
+
+    Searching only the left edges from the left returns the first edge at or above the
+    value, which pushes everything strictly inside a bin one place to the right and
+    leaves bin 0 collecting only values exactly equal to the lower bound.
+    """
+    x = jnp.array([[0.1], [0.4], [0.6], [0.9]])
+    hist = batch_histogram(x, None, bins=4, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0, 1.0, 1.0]))
+
+    # Agreement with numpy.histogram over a less tidy sample
+    values = np.random.default_rng(0).normal(size=200).astype(np.float32)
+    mine = np.asarray(
+        batch_histogram(jnp.asarray(values).reshape(-1, 1), None, bins=7, min_val=-3.0, max_val=3.0)
+    )[0]
+    reference = np.histogram(values, bins=7, range=(-3.0, 3.0))[0]
+    assert np.array_equal(mine.astype(int), reference)
+
+
+def test_batch_histogram_closes_the_last_bin_on_the_right():
+    """A value equal to the upper bound belongs to the last bin, as in numpy."""
+    x = jnp.array([[0.0], [1.0]])
+    hist = batch_histogram(x, None, bins=2, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0]))
+
+
+def test_batch_histogram_per_graph_rows():
+    """With a batch vector, each graph gets its own row of counts."""
+    x = jnp.array([[0.1], [0.9], [0.1], [0.1]])
+    batch = jnp.array([0, 0, 1, 1])
+    hist = batch_histogram(x, batch, bins=2, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0]))
+    assert jnp.allclose(hist[1], jnp.array([2.0, 0.0]))
 
 
 if __name__ == "__main__":

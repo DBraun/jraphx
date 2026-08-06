@@ -327,3 +327,54 @@ def test_gat_conv_size_with_dense_input():
 # - Advanced sparse attention weight formats - Simplified in JraphX
 
 # These missing features are documented in docs/source/missing_tests.rst
+
+
+def test_gat_conv_does_not_duplicate_existing_self_loops():
+    """A pre-existing self-loop must not be counted twice in the attention softmax.
+
+    PyG removes self-loops before inserting its own. Adding a second loop for a node
+    that already had one roughly doubles its self-attention mass and correspondingly
+    down-weights its real neighbours, so the output for that node must match what the
+    layer produces on the same graph with the loop stripped out beforehand.
+    """
+    x = jnp.arange(6, dtype=jnp.float32).reshape(3, 2)
+    with_loop = jnp.array([[0, 1, 0], [0, 0, 1]])  # (0, 0) already present
+    without_loop = jnp.array([[1, 0], [0, 1]])  # same graph, loop removed
+
+    conv = GATConv(2, 2, heads=1, rngs=nnx.Rngs(0))
+    assert jnp.allclose(conv(x, with_loop), conv(x, without_loop), atol=1e-6)
+
+
+def test_gat_conv_bipartite_self_loops_use_the_smaller_node_count():
+    """Self-loops only exist for nodes present in both endpoint tables.
+
+    With more target nodes than source nodes, sizing the loop set from the target count
+    appends loops whose source index is out of range for ``x_src``. JAX clamps such a
+    gather to the last row instead of raising, which silently gives several target nodes
+    the same fabricated message and pollutes the softmax of the real ones.
+    """
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    edge_index = jnp.array([[0, 1], [0, 3]])
+
+    conv = GATConv((2, 2), 3, heads=1, bias=False, rngs=nnx.Rngs(0))
+    out = conv((x_src, x_dst), edge_index)
+
+    assert out.shape == (4, 3)
+    assert bool(jnp.isfinite(out).all())
+
+    # Target 2 has no incoming edge and no self-loop of its own, so it must stay empty
+    assert jnp.allclose(out[2], 0.0)
+
+    # Clamping used to make rows 1..3 identical
+    assert not jnp.allclose(out[1], out[2])
+
+
+def test_gat_conv_rejects_out_of_range_source_index():
+    """An index genuinely past the source table must raise, not silently clamp."""
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    conv = GATConv((2, 2), 3, heads=1, rngs=nnx.Rngs(0))
+
+    with pytest.raises(IndexError, match="Source indices"):
+        conv((x_src, x_dst), jnp.array([[0, 7], [0, 3]]))

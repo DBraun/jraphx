@@ -33,6 +33,27 @@ def _canonical_reduce(reduce: str) -> str:
     return _REDUCE_ALIASES[reduce]
 
 
+def _accumulator_dtype(dtype: jnp.dtype) -> jnp.dtype:
+    """Returns the dtype a summation over ``dtype`` should accumulate in.
+
+    Reductions that divide by a member count are widened to at least float32.
+    bfloat16 and float16 saturate far too early to total a real neighbourhood:
+    bfloat16 has 8 mantissa bits, so its consecutive integers stop at 256 and both
+    the running total and the count freeze there, which skews the result by a
+    degree-dependent factor. Integer dtypes are left alone so that exact integer
+    arithmetic is not rounded through a float.
+
+    Args:
+        dtype: The dtype of the values being summed.
+
+    Returns:
+        The dtype to accumulate in.
+    """
+    if jnp.issubdtype(dtype, jnp.floating):
+        return jnp.promote_types(dtype, jnp.float32)
+    return dtype
+
+
 def _resolve_dim_size(index: jnp.ndarray, dim_size: int | None) -> int:
     """Returns the number of output segments as a static Python integer.
 
@@ -188,14 +209,26 @@ def _scatter_mean(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    # Compute sum and count efficiently
-    sums = jax.ops.segment_sum(src, index, num_segments=dim_size)
-    ones = jnp.ones((src.shape[0],) + (1,) * (src.ndim - 1), dtype=src.dtype)
+    # Both the running total and the member count are accumulated in at least
+    # float32, never in a narrower `src.dtype`. bfloat16 carries 8 mantissa bits, so
+    # its integer sequence stops at 256 -- 256 + 1 rounds straight back to 256 --
+    # and both accumulators saturate well before a high-degree node is finished:
+    # the count freezes at 256 and the total stalls, leaving the quotient wrong by
+    # a degree-dependent factor with no warning.
+    accum_dtype = _accumulator_dtype(src.dtype)
+    sums = jax.ops.segment_sum(src.astype(accum_dtype), index, num_segments=dim_size)
+    ones = jnp.ones((src.shape[0],) + (1,) * (src.ndim - 1), dtype=accum_dtype)
     counts = jax.ops.segment_sum(ones, index, num_segments=dim_size)
 
     # Avoid division by zero
     counts = jnp.maximum(counts, 1.0)
-    return sums / counts
+
+    # A floating-point input gets its own precision back; an integer one keeps the
+    # float result that `jnp.true_divide` would have produced.
+    quotient = sums / counts
+    if jnp.issubdtype(src.dtype, jnp.floating):
+        quotient = quotient.astype(src.dtype)
+    return quotient
 
 
 def scatter_max(
@@ -409,14 +442,19 @@ def segment_mean(
     """
     num_segments = _resolve_dim_size(segment_ids, num_segments)
 
-    # Compute sum and count
-    sums = jax.ops.segment_sum(data, segment_ids, num_segments)
-    counts = jax.ops.segment_sum(jnp.ones_like(data), segment_ids, num_segments)
+    # Accumulated in at least float32 so that neither the total nor the count
+    # saturates for low-precision `data`; see :func:`_scatter_mean`.
+    accum_dtype = _accumulator_dtype(data.dtype)
+    sums = jax.ops.segment_sum(data.astype(accum_dtype), segment_ids, num_segments)
+    counts = jax.ops.segment_sum(jnp.ones_like(data, dtype=accum_dtype), segment_ids, num_segments)
 
     # Avoid division by zero
-    counts = jnp.where(counts == 0, 1, counts)
+    counts = jnp.where(counts == 0, 1.0, counts)
 
-    return sums / counts
+    quotient = sums / counts
+    if jnp.issubdtype(data.dtype, jnp.floating):
+        quotient = quotient.astype(data.dtype)
+    return quotient
 
 
 def segment_max(
@@ -495,18 +533,27 @@ def _scatter_std(
     if dim != 0:
         raise NotImplementedError("Optimized scatter only supports dim=0")
 
-    mean = _scatter_mean(src, index, dim_size, dim)
+    # Widened for the whole computation, for the reason given in
+    # :func:`_scatter_mean`: the mean, the squared deviations and the member count
+    # all saturate in a narrow float and would drag the deviation down with them.
+    accum_dtype = _accumulator_dtype(src.dtype)
+    widened = src.astype(accum_dtype)
+
+    mean = _scatter_mean(widened, index, dim_size, dim)
 
     # Accumulate squared deviations around the segment mean.
-    centered = src - mean[index]
+    centered = widened - mean[index]
     sum_sq = _scatter_add(centered * centered, index, dim_size, dim)
 
     counts = jax.ops.segment_sum(
-        jnp.ones_like(index, dtype=mean.dtype), index, num_segments=dim_size
+        jnp.ones_like(index, dtype=accum_dtype), index, num_segments=dim_size
     ).reshape((-1,) + (1,) * (src.ndim - 1))
 
     denominator = jnp.maximum(counts - 1.0 if unbiased else counts, 1.0)
-    return jnp.sqrt(sum_sq / denominator)
+    result = jnp.sqrt(sum_sq / denominator)
+    if jnp.issubdtype(src.dtype, jnp.floating):
+        result = result.astype(src.dtype)
+    return result
 
 
 def scatter_logsumexp(

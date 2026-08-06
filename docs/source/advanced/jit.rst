@@ -9,6 +9,23 @@ JIT-Compiling GNN Models
 ------------------------
 
 All **JraphX** layers and models are designed to be JIT-compatible out of the box.
+
+.. warning::
+
+    Use :func:`nnx.jit`, not :func:`jax.jit`, whenever the compiled function mutates
+    module state. NNX modules are pytrees, so :func:`jax.jit` accepts a model and an
+    optimizer without complaint, but it traces a *copy* of their state and discards
+    every in-place update when the function returns. A training step wrapped in
+    :func:`jax.jit` therefore raises no error, prints a perfectly plausible loss, and
+    never changes a single parameter -- the loss is bit-identical on every epoch and
+    ``optimizer.step`` stays at zero. The same silence hides a frozen
+    :class:`nnx.Dropout` key, which reuses one mask forever, and frozen
+    :class:`~jraphx.nn.norm.BatchNorm` running statistics.
+
+    :func:`nnx.jit` understands NNX state and propagates the mutation back out.
+    :func:`jax.jit` is only safe for a genuinely pure function -- a forward pass on a
+    model in evaluation mode, with no parameter update and no RNG draw.
+
 Here's how to JIT-compile a simple GNN model:
 
 .. code-block:: python
@@ -34,9 +51,12 @@ Here's how to JIT-compile a simple GNN model:
     )
 
     # JIT compile the forward pass
-    @jax.jit
+    @nnx.jit
     def predict(model, x, edge_index):
         return model(x, edge_index)
+
+    # Evaluation mode makes dropout deterministic, so this really is a pure function
+    model.eval()
 
     # First call compiles, subsequent calls are fast
     predictions = predict(model, data.x, data.edge_index)
@@ -45,7 +65,8 @@ Here's how to JIT-compile a simple GNN model:
 JIT-Compiling Training Steps
 ----------------------------
 
-For optimal performance, JIT-compile your entire training step:
+For optimal performance, JIT-compile your entire training step. This step updates the
+parameters, so it must be wrapped in :func:`nnx.jit`:
 
 .. code-block:: python
 
@@ -54,7 +75,9 @@ For optimal performance, JIT-compile your entire training step:
     # Setup optimizer
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
-    @jax.jit
+    model.train()
+
+    @nnx.jit
     def train_step(model, optimizer, x, edge_index, targets, train_indices):
         """JIT-compiled training step."""
         def loss_fn(model):
@@ -107,10 +130,13 @@ When creating custom **JraphX** layers, ensure they are JIT-compatible by follow
             # Standard message passing
             return self.propagate(edge_index, x)
 
-    # This layer is automatically JIT-compatible
-    @jax.jit
-    def forward_with_custom_layer(x, edge_index):
-        layer = CustomGNNLayer(16, 32, rngs=nnx.Rngs(42))
+    # This layer is automatically JIT-compatible. Build it outside the compiled
+    # function: a module constructed inside the trace is rebuilt on every call and its
+    # freshly initialized parameters are thrown away when the function returns.
+    layer = CustomGNNLayer(16, 32, rngs=nnx.Rngs(42))
+
+    @nnx.jit
+    def forward_with_custom_layer(layer, x, edge_index):
         return layer(x, edge_index)
 
 Operations That Need Static Sizes
@@ -150,7 +176,7 @@ JIT compilation provides several benefits for **JraphX** models:
         return model(x, edge_index)
 
     # JIT version
-    fast_predict = jax.jit(slow_predict)
+    fast_predict = nnx.jit(slow_predict)
 
     # Warm up JIT (compilation happens here)
     _ = fast_predict(model, data.x, data.edge_index)
@@ -171,7 +197,8 @@ JIT compilation provides several benefits for **JraphX** models:
 Best Practices
 --------------
 
-1. **JIT the training step**: Compile the entire training step for maximum benefit
+1. **JIT the training step with** :func:`nnx.jit`: Compile the entire step for maximum
+   benefit, and reach for :func:`jax.jit` only when nothing is mutated
 2. **Warm up on dummy data**: Compile before timing-critical sections
 3. **Static shapes**: Use fixed-size arrays when possible for better optimization
 4. **Batch processing**: JIT works especially well with batched operations
@@ -180,21 +207,34 @@ Best Practices
 .. code-block:: python
 
     # Good: JIT-friendly batch processing
-    @jax.jit
+    @nnx.jit
     def process_batch(model, batch_x, batch_edge_index):
         return nnx.vmap(model)(batch_x, batch_edge_index)
 
     # Better: Use JraphX Batch for variable-size graphs
-    @jax.jit
+    @nnx.jit
     def process_jraphx_batch(model, batch):
         return model(batch.x, batch.edge_index)
 
 Common Pitfalls
 ---------------
 
+- **Mutating state under** :func:`jax.jit`: The most costly pitfall, because it is
+  silent. Parameter updates, RNG draws and running statistics do not escape a
+  :func:`jax.jit` boundary; use :func:`nnx.jit` for anything that writes to a module
 - **Dynamic shapes**: Avoid operations that change array shapes based on data
 - **Python conditionals**: Use :func:`jnp.where` instead of :obj:`if` statements
 - **Global state**: Avoid modifying global variables inside JIT functions
 - **Device transfers**: Minimize data movement between devices within JIT functions
+
+A quick way to catch a silently frozen training step is to assert that it actually
+moves:
+
+.. code-block:: python
+
+    before = jax.tree.leaves(nnx.state(model, nnx.Param))
+    loss = train_step(model, optimizer, data.x, data.edge_index, targets, train_indices)
+    after = jax.tree.leaves(nnx.state(model, nnx.Param))
+    assert any((a != b).any() for a, b in zip(before, after)), "no parameter changed"
 
 For more information on JAX JIT compilation, see the `JAX documentation <https://jax.readthedocs.io/en/latest/jax-101/02-jitting.html>`__.

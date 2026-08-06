@@ -256,6 +256,45 @@ def test_sage_conv_deterministic():
     assert jnp.allclose(out1, out2)
 
 
+def test_sage_conv_max_transforms_after_aggregation():
+    """``aggr="max"`` must compute ``W (max_j x_j)``, not ``max_j (W x_j)``.
+
+    An elementwise maximum does not commute with a linear map, so applying the neighbour
+    transform before aggregation would take the maximum in the *output* space and mix
+    columns drawn from different source nodes. Sum and mean are unaffected either way,
+    which is exactly why this needs its own test.
+    """
+    x = jnp.array([[1.0, 0.0], [0.0, 1.0], [-2.0, 3.0]])
+    # Nodes 0 and 1 both point at node 2; node 2 points at node 0.
+    edge_index = jnp.array([[0, 1, 2], [2, 2, 0]])
+
+    conv = SAGEConv(2, 2, aggr="max", root_weight=False, bias=False, rngs=nnx.Rngs(0))
+    weight = conv.lin.kernel[...]
+    out = conv(x, edge_index)
+
+    # Node 2 aggregates over nodes 0 and 1
+    expected = jnp.maximum(x[0], x[1]) @ weight
+    assert jnp.allclose(out[2], expected, atol=1e-6)
+
+    # The pre-aggregation ordering would give a different answer here, so the test can
+    # actually fail if the ordering regresses
+    wrong = jnp.maximum(x[0] @ weight, x[1] @ weight)
+    assert not jnp.allclose(out[2], wrong, atol=1e-6)
+
+
+def test_sage_conv_mean_is_unchanged_by_transform_order():
+    """A linear map commutes with mean aggregation, so both orderings agree."""
+    x = jnp.array([[1.0, 0.0], [0.0, 1.0], [-2.0, 3.0]])
+    edge_index = jnp.array([[0, 1, 2], [2, 2, 0]])
+
+    conv = SAGEConv(2, 2, aggr="mean", root_weight=False, bias=False, rngs=nnx.Rngs(0))
+    weight = conv.lin.kernel[...]
+    out = conv(x, edge_index)
+
+    assert jnp.allclose(out[2], ((x[0] + x[1]) / 2) @ weight, atol=1e-6)
+    assert jnp.allclose(out[2], (x[0] @ weight + x[1] @ weight) / 2, atol=1e-6)
+
+
 # TODO: The following PyG SAGE test features are not implemented in JraphX:
 # - TorchScript JIT compilation - JAX uses jax.jit with different syntax
 # - Sparse tensor support (SparseTensor) - JAX doesn't have direct equivalent

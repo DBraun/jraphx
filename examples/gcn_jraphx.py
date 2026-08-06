@@ -119,12 +119,49 @@ def batch_graphs_jraphx(graphs_list):
     return batched_data
 
 
+def stack_graphs(graphs_list):
+    """Stack equally-sized graphs along a leading graph axis.
+
+    Data parallelism distributes whole *graphs*, so each device needs complete graphs
+    rather than a slice of one graph's nodes. Splitting a single graph's node table
+    across devices while its edges still hold global node ids gives out-of-range
+    gathers, which JAX clamps, and drops every message whose target lives on another
+    device -- silently, with no error and no NaN.
+
+    Args:
+        graphs_list: Data objects that all share the same node and edge counts.
+
+    Returns:
+        Tuple of (x, edge_index, y) shaped [G, N, F], [G, 2, E] and [G, N].
+    """
+    return (
+        jnp.stack([g.x for g in graphs_list]),
+        jnp.stack([g.edge_index for g in graphs_list]),
+        jnp.stack([g.y for g in graphs_list]),
+    )
+
+
+@nnx.vmap(in_axes=(None, 0, 0))
+def forward_graphs(model: SimpleGCN, x, edge_index):
+    """Apply the model to each graph of a leading graph axis.
+
+    :obj:`nnx.vmap` rather than :obj:`jax.vmap`: the model draws a dropout key, and
+    :obj:`jax.vmap` cannot advance NNX RNG state across a trace boundary. The dropout
+    mask is shared by the graphs within one call and changes from call to call.
+    """
+    return model(x, edge_index)
+
+
 def train_step_base(model: SimpleGCN, optimizer: nnx.Optimizer, x, edge_index, y):
-    """Base training step with cross-entropy loss."""
+    """Base training step with cross-entropy loss.
+
+    ``x``, ``edge_index`` and ``y`` carry a leading graph axis; the model is mapped over
+    it, so every graph is processed whole.
+    """
 
     @nnx.value_and_grad
     def grad_loss_fn(model, x, edge_index, y):
-        logits = model(x, edge_index)
+        logits = forward_graphs(model, x, edge_index)
         # Cross-entropy loss for node classification
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
         loss = loss.mean()
@@ -151,9 +188,9 @@ def create_train_step(mesh):
         in_specs=(
             P(),  # Model state - replicated across all devices
             P(),  # Optimizer state - replicated across all devices
-            P("dp", None),  # x - nodes sharded, features replicated
-            P(None, "dp"),  # edge_index - edges sharded
-            P("dp"),  # y - labels sharded
+            P("dp", None, None),  # x - graphs sharded, each graph kept whole
+            P("dp", None, None),  # edge_index - graphs sharded, edges kept with graph
+            P("dp", None),  # y - graphs sharded
         ),
         out_specs=P(),  # Loss - reduced and replicated
     )
@@ -163,16 +200,19 @@ def create_train_step(mesh):
 
 
 def eval_step_base(model: SimpleGCN, x, edge_index, y):
-    """Base evaluation step with accuracy computation."""
-    model.eval()
-    logits = model(x, edge_index)
+    """Base evaluation step with accuracy computation.
+
+    The caller is responsible for putting the model in evaluation mode: switching modes
+    inside the mapped function would be a state mutation that does not escape.
+    """
+    logits = forward_graphs(model, x, edge_index)
 
     # Compute loss
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
     loss = loss.mean()
 
     # Compute accuracy
-    predictions = jnp.argmax(logits, axis=1)
+    predictions = jnp.argmax(logits, axis=-1)
     accuracy = jnp.mean(predictions == y)
 
     loss, accuracy = jax.lax.pmean((loss, accuracy), "dp")
@@ -189,9 +229,9 @@ def create_eval_step(mesh):
         mesh=mesh,
         in_specs=(
             P(),  # Model state - replicated
-            P("dp", None),  # x - nodes sharded, features replicated
-            P(None, "dp"),  # edge_index - edges sharded
-            P("dp"),  # y - labels sharded
+            P("dp", None, None),  # x - graphs sharded, each graph kept whole
+            P("dp", None, None),  # edge_index - graphs sharded, edges kept with graph
+            P("dp", None),  # y - graphs sharded
         ),
         out_specs=(
             P(),  # Loss - reduced and replicated
@@ -259,17 +299,20 @@ def main():
     train_step = create_train_step(mesh)
     eval_step = create_eval_step(mesh)
 
+    # One graph per device, so the sharded graph axis divides evenly
+    graphs_per_step = 4 * len(devices)
+
     # Training loop
     model.train()
     num_epochs = 100
 
     for epoch in range(num_epochs):
-        # Generate new random batch each epoch
-        graphs = [create_synthetic_graph_data(rngs) for _ in range(4)]
-        batched_data = batch_graphs_jraphx(graphs)
+        # Generate new random batch each epoch, stacked along a leading graph axis
+        graphs = [create_synthetic_graph_data(rngs) for _ in range(graphs_per_step)]
+        x_stacked, edge_stacked, y_stacked = stack_graphs(graphs)
 
-        # Train step with jraphx Data
-        loss = train_step(model, optimizer, batched_data.x, batched_data.edge_index, batched_data.y)
+        # Train step over whole graphs
+        loss = train_step(model, optimizer, x_stacked, edge_stacked, y_stacked)
 
         if epoch % 20 == 0:
             print(f"Epoch {epoch:3d}, Loss: {loss:.4f}")
@@ -278,11 +321,12 @@ def main():
     print("-" * 30)
 
     # Test on new graphs
-    test_graphs = [create_synthetic_graph_data(rngs, num_nodes=25) for _ in range(4)]
-    test_batch = batch_graphs_jraphx(test_graphs)
+    test_graphs = [create_synthetic_graph_data(rngs, num_nodes=25) for _ in range(graphs_per_step)]
+    test_x, test_edges, test_y = stack_graphs(test_graphs)
 
-    # Evaluate
-    test_loss, test_accuracy = eval_step(model, test_batch.x, test_batch.edge_index, test_batch.y)
+    # Evaluate. Evaluation mode is set here, not inside the mapped step.
+    model.eval()
+    test_loss, test_accuracy = eval_step(model, test_x, test_edges, test_y)
     print(f"Test loss: {test_loss:.4f}")
     print(f"Test accuracy: {test_accuracy:.2%}")
 
