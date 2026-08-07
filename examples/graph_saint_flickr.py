@@ -28,10 +28,10 @@ from jraphx.utils import degree
 class FlickrData(Data):
     """Extended Data class for Flickr dataset with additional fields."""
 
-    edge_weight: jnp.ndarray | None = None
-    train_mask: jnp.ndarray | None = None
-    val_mask: jnp.ndarray | None = None
-    test_mask: jnp.ndarray | None = None
+    edge_weight: jax.Array | None = None
+    train_mask: jax.Array | None = None
+    val_mask: jax.Array | None = None
+    test_mask: jax.Array | None = None
     num_classes: int | None = None
 
 
@@ -73,12 +73,12 @@ def load_flickr_dataset(path: str | None = None):
 
 
 def random_walk_sampling(
-    edge_index: jnp.ndarray,
+    edge_index: jax.Array,
     num_nodes: int,
     batch_size: int,
     walk_length: int,
     key: jax.Array,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jax.Array, jax.Array]:
     """
     Perform random walk sampling for GraphSAINT.
 
@@ -118,8 +118,8 @@ def random_walk_sampling(
 
 
 def extract_subgraph(
-    data: FlickrData, node_idx: jnp.ndarray
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    data: FlickrData, node_idx: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Extract subgraph for sampled nodes."""
     # Create node mapping
     node_mask = jnp.zeros(data.x.shape[0], dtype=bool)
@@ -173,10 +173,10 @@ class GraphSAINTModel(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
+    ) -> jax.Array:
         # First layer
         x1 = self.conv1(x, edge_index, edge_weight)
         if self.use_batch_norm:
@@ -207,11 +207,11 @@ class GraphSAINTModel(nnx.Module):
 
 @jax.jit
 def compute_loss(
-    logits: jnp.ndarray,
-    labels: jnp.ndarray,
-    mask: jnp.ndarray,
-    node_norm: jnp.ndarray | None = None,
-) -> jnp.ndarray:
+    logits: jax.Array,
+    labels: jax.Array,
+    mask: jax.Array,
+    node_norm: jax.Array | None = None,
+) -> jax.Array:
     """Compute cross-entropy loss with optional node normalization."""
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
 
@@ -226,14 +226,14 @@ def compute_loss(
 @nnx.jit
 def evaluate_jit(
     model: GraphSAINTModel,
-    x: jnp.ndarray,
-    edge_index: jnp.ndarray,
-    edge_weight: jnp.ndarray,
-    y: jnp.ndarray,
-    train_mask: jnp.ndarray,
-    val_mask: jnp.ndarray,
-    test_mask: jnp.ndarray,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    x: jax.Array,
+    edge_index: jax.Array,
+    edge_weight: jax.Array,
+    y: jax.Array,
+    train_mask: jax.Array,
+    val_mask: jax.Array,
+    test_mask: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """JIT-compiled evaluation on full graph."""
     # Model should already be in eval mode
     logits = model(x, edge_index, edge_weight)
@@ -271,13 +271,13 @@ def evaluate(model: GraphSAINTModel, data: FlickrData) -> tuple[float, float, fl
 def train_step_jit(
     model: GraphSAINTModel,
     optimizer,
-    sub_x: jnp.ndarray,
-    sub_edge_index: jnp.ndarray,
-    sub_edge_weight: jnp.ndarray,
-    sub_y: jnp.ndarray,
-    sub_train_mask: jnp.ndarray,
-    node_norm: jnp.ndarray | None,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+    sub_x: jax.Array,
+    sub_edge_index: jax.Array,
+    sub_edge_weight: jax.Array,
+    sub_y: jax.Array,
+    sub_train_mask: jax.Array,
+    node_norm: jax.Array | None,
+) -> tuple[jax.Array, jax.Array]:
     """JIT-compiled training step."""
 
     def loss_fn(model):

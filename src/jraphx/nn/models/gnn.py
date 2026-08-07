@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -46,8 +47,8 @@ class GCN(BasicGNN):
 
     def precompute_norm(
         self,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
         num_nodes: int | None = None,
         dtype: jnp.dtype | None = None,
     ) -> None:

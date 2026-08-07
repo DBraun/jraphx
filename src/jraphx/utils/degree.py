@@ -7,10 +7,10 @@ from jraphx.utils.num_nodes import maybe_num_nodes
 
 
 def degree(
-    index: jnp.ndarray,
+    index: jax.Array,
     num_nodes: int | None = None,
     dtype: jnp.dtype | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     r"""Computes the (unweighted) degree of a given one-dimensional index
     tensor.
 
@@ -42,10 +42,10 @@ def degree(
 
 
 def in_degree(
-    edge_index: jnp.ndarray,
+    edge_index: jax.Array,
     num_nodes: int | None = None,
     dtype: jnp.dtype | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Compute the in-degree of nodes.
 
     Args:
@@ -63,10 +63,10 @@ def in_degree(
 
 
 def out_degree(
-    edge_index: jnp.ndarray,
+    edge_index: jax.Array,
     num_nodes: int | None = None,
     dtype: jnp.dtype | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Compute the out-degree of nodes.
 
     Args:

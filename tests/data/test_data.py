@@ -14,7 +14,7 @@ from jraphx.data import Data
 class CustomData(Data):
     """A Data subclass built with the documented subclassing recipe."""
 
-    custom_attr: jnp.ndarray | None = None
+    custom_attr: jax.Array | None = None
 
     def __eq__(self, other: object) -> bool:
         """Delegate to the base class so array fields compare element-wise."""

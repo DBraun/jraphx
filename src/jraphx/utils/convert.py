@@ -1,5 +1,6 @@
 """Graph conversion utilities."""
 
+import jax
 from jax import numpy as jnp
 
 from jraphx.utils.coalesce import coalesce
@@ -7,11 +8,11 @@ from jraphx.utils.num_nodes import maybe_num_nodes
 
 
 def to_undirected(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     num_nodes: int | None = None,
     reduce: str = "add",
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+) -> tuple[jax.Array, jax.Array | None]:
     r"""Converts the graph given by :attr:`edge_index` to an undirected graph
     such that :math:`(j,i) \in \mathcal{E}` for every edge :math:`(i,j) \in
     \mathcal{E}`.
@@ -56,10 +57,10 @@ def to_undirected(
 
 
 def to_dense_adj(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     max_num_nodes: int | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Convert edge indices to dense adjacency matrix.
 
     Parallel edges are accumulated, so a duplicated edge contributes the sum of
@@ -93,7 +94,7 @@ def to_dense_adj(
     return adj.at[edge_index[0], edge_index[1]].add(edge_attr)
 
 
-def to_edge_index(adj: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+def to_edge_index(adj: jax.Array) -> tuple[jax.Array, jax.Array]:
     """Convert adjacency matrix to edge indices.
 
     An edge is emitted for every entry that is non-zero (for a feature tensor,

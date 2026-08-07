@@ -2,6 +2,7 @@
 
 from typing import Literal, Union, overload
 
+import jax
 from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers, leaky_relu
 from jax import numpy as jnp
@@ -212,29 +213,29 @@ class GATv2Conv(MessagePassing):
     @overload
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = ...,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = ...,
         return_attention_weights: Literal[False] = ...,
-    ) -> jnp.ndarray: ...
+    ) -> jax.Array: ...
 
     @overload
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = ...,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = ...,
         *,
         return_attention_weights: Literal[True],
-    ) -> tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]: ...
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]: ...
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         return_attention_weights: bool = False,
-    ) -> Union[jnp.ndarray, tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]]:
+    ) -> Union[jax.Array, tuple[jax.Array, tuple[jax.Array, jax.Array]]]:
         """Forward pass of the GATv2 layer.
 
         Args:

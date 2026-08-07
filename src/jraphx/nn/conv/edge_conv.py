@@ -6,6 +6,7 @@ https://arxiv.org/abs/1801.07829
 
 from typing import Union
 
+import jax
 from flax.nnx import Module
 from jax import numpy as jnp
 
@@ -52,10 +53,10 @@ class EdgeConv(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Compute messages using edge features (x_i, x_j - x_i).
 
         Raises:
@@ -68,14 +69,14 @@ class EdgeConv(MessagePassing):
                 "on the difference between the two endpoints of each edge"
             )
         # Concatenate [x_i, x_j - x_i] and pass through network
-        out: jnp.ndarray = self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+        out: jax.Array = self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
         return out
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-    ) -> jnp.ndarray:
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+    ) -> jax.Array:
         """Forward pass.
 
         Args:
@@ -121,10 +122,10 @@ class DynamicEdgeConv(Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray | None = None,
-        knn_indices: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array | None = None,
+        knn_indices: jax.Array | None = None,
+    ) -> jax.Array:
         """Forward pass.
 
         Args:

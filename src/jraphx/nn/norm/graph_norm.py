@@ -45,10 +45,10 @@ class GraphNorm(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
         batch_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Apply graph normalization.
 
         Args:

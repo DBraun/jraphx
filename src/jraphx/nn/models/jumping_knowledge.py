@@ -1,5 +1,6 @@
 """Jumping Knowledge aggregation module for JraphX."""
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -106,7 +107,7 @@ class JumpingKnowledge(nnx.Module):
             self.rnn_backward = nnx.data(None)
             self.att = nnx.data(None)
 
-    def __call__(self, xs: list[jnp.ndarray]) -> jnp.ndarray:
+    def __call__(self, xs: list[jax.Array]) -> jax.Array:
         """Forward pass.
 
         Args:

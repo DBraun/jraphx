@@ -54,7 +54,7 @@ def _accumulator_dtype(dtype: jnp.dtype) -> jnp.dtype:
     return dtype
 
 
-def _resolve_dim_size(index: jnp.ndarray, dim_size: int | None) -> int:
+def _resolve_dim_size(index: jax.Array, dim_size: int | None) -> int:
     """Returns the number of output segments as a static Python integer.
 
     Args:
@@ -77,7 +77,7 @@ def _resolve_dim_size(index: jnp.ndarray, dim_size: int | None) -> int:
     return int(index.max()) + 1
 
 
-def _empty_segment_mask(index: jnp.ndarray, dim_size: int, ndim: int) -> jnp.ndarray:
+def _empty_segment_mask(index: jax.Array, dim_size: int, ndim: int) -> jax.Array:
     """Builds a mask selecting the segments that received at least one value.
 
     Args:
@@ -95,11 +95,11 @@ def _empty_segment_mask(index: jnp.ndarray, dim_size: int, ndim: int) -> jnp.nda
 
 
 def scatter_add(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
-) -> jnp.ndarray:
+) -> jax.Array:
     r"""Sums all values from the :obj:`src` tensor at the indices specified
     in the :obj:`index` tensor along a given dimension ``dim``.
 
@@ -123,17 +123,17 @@ def scatter_add(
     Returns:
         jax.Array: Tensor with scattered values summed at each index.
     """
-    out: jnp.ndarray = _scatter_add(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jax.Array = _scatter_add(src, index, _resolve_dim_size(index, dim_size), dim)
     return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
 def _scatter_add(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_add` with a static ``dim_size``.
 
     Args:
@@ -163,11 +163,11 @@ def _scatter_add(
 
 
 def scatter_mean(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Scatter mean operation - averages values from src at indices specified by index.
 
     Empty segments are filled with zero.
@@ -182,17 +182,17 @@ def scatter_mean(
     Returns:
         Tensor with scattered values
     """
-    out: jnp.ndarray = _scatter_mean(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jax.Array = _scatter_mean(src, index, _resolve_dim_size(index, dim_size), dim)
     return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
 def _scatter_mean(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_mean` with a static ``dim_size``.
 
     Args:
@@ -232,12 +232,12 @@ def _scatter_mean(
 
 
 def scatter_max(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     fill_value: float | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Scatter max operation - takes maximum of values from src at indices specified by index.
 
     Segments that receive no value are filled with ``fill_value``. Emptiness is
@@ -256,7 +256,7 @@ def scatter_max(
     Returns:
         Tensor with scattered values
     """
-    out: jnp.ndarray = _scatter_max(
+    out: jax.Array = _scatter_max(
         src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value
     )
     return out
@@ -264,12 +264,12 @@ def scatter_max(
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
 def _scatter_max(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
     fill_value: float | None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_max` with a static ``dim_size``.
 
     Args:
@@ -300,12 +300,12 @@ def _scatter_max(
 
 
 def scatter_min(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     fill_value: float | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Scatter min operation - takes minimum of values from src at indices specified by index.
 
     Segments that receive no value are filled with ``fill_value``. Emptiness is
@@ -324,7 +324,7 @@ def scatter_min(
     Returns:
         Tensor with scattered values
     """
-    out: jnp.ndarray = _scatter_min(
+    out: jax.Array = _scatter_min(
         src, index, _resolve_dim_size(index, dim_size), dim, fill_value=fill_value
     )
     return out
@@ -332,12 +332,12 @@ def scatter_min(
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "fill_value"))
 def _scatter_min(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
     fill_value: float | None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_min` with a static ``dim_size``.
 
     Args:
@@ -368,12 +368,12 @@ def _scatter_min(
 
 
 def scatter(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     reduce: str = "add",
-) -> jnp.ndarray:
+) -> jax.Array:
     """Generic scatter operation using JAX's optimized segment operations.
 
     This function scatters values from src tensor at indices specified by index tensor,
@@ -407,10 +407,10 @@ def scatter(
 
 
 def segment_sum(
-    data: jnp.ndarray,
-    segment_ids: jnp.ndarray,
+    data: jax.Array,
+    segment_ids: jax.Array,
     num_segments: int | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes the sum along segments of a tensor.
 
     Args:
@@ -427,10 +427,10 @@ def segment_sum(
 
 
 def segment_mean(
-    data: jnp.ndarray,
-    segment_ids: jnp.ndarray,
+    data: jax.Array,
+    segment_ids: jax.Array,
     num_segments: int | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes the mean along segments of a tensor.
 
     Args:
@@ -459,10 +459,10 @@ def segment_mean(
 
 
 def segment_max(
-    data: jnp.ndarray,
-    segment_ids: jnp.ndarray,
+    data: jax.Array,
+    segment_ids: jax.Array,
     num_segments: int | None = None,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes the maximum along segments of a tensor.
 
     Args:
@@ -479,12 +479,12 @@ def segment_max(
 
 
 def scatter_std(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     unbiased: bool = True,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Scatter standard deviation - computes std of values at indices.
 
     The deviations are accumulated around the per-segment mean, which avoids the
@@ -503,7 +503,7 @@ def scatter_std(
     Returns:
         Tensor with scattered standard deviations
     """
-    out: jnp.ndarray = _scatter_std(
+    out: jax.Array = _scatter_std(
         src, index, _resolve_dim_size(index, dim_size), dim, unbiased=unbiased
     )
     return out
@@ -511,12 +511,12 @@ def scatter_std(
 
 @partial(jax.jit, static_argnames=("dim_size", "dim", "unbiased"))
 def _scatter_std(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
     unbiased: bool,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_std` with a static ``dim_size``.
 
     Args:
@@ -558,11 +558,11 @@ def _scatter_std(
 
 
 def scatter_logsumexp(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Scatter logsumexp - numerically stable log-sum-exp aggregation.
 
     Computes log(sum(exp(x))) for values at each index, with numerical stability.
@@ -579,17 +579,17 @@ def scatter_logsumexp(
     Returns:
         Tensor with log-sum-exp aggregated values
     """
-    out: jnp.ndarray = _scatter_logsumexp(src, index, _resolve_dim_size(index, dim_size), dim)
+    out: jax.Array = _scatter_logsumexp(src, index, _resolve_dim_size(index, dim_size), dim)
     return out
 
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
 def _scatter_logsumexp(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_logsumexp` with a static ``dim_size``.
 
     Args:
@@ -625,12 +625,12 @@ def _scatter_logsumexp(
 
 # Keep fallback for compatibility
 def scatter_fallback(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     reduce: str = "add",
-) -> jnp.ndarray:
+) -> jax.Array:
     """Fallback scatter implementation using a Python loop over rows (slow).
 
     This implementation is kept for compatibility and testing.

@@ -40,10 +40,10 @@ except ImportError as err:
 
 @dataclass
 class Data(jraphx.Data):
-    train_mask: jnp.ndarray | None = None
-    val_mask: jnp.ndarray | None = None
-    test_mask: jnp.ndarray | None = None
-    edge_attr: jnp.ndarray | None = None
+    train_mask: jax.Array | None = None
+    val_mask: jax.Array | None = None
+    test_mask: jax.Array | None = None
+    edge_attr: jax.Array | None = None
 
 
 def pyg_to_jraphx_planetoid(pyg_data):
@@ -120,10 +120,10 @@ class CoraGCN(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_weight: jax.Array = None,
+    ) -> jax.Array:
         # First layer with ReLU and dropout
         x = self.conv1(x, edge_index, edge_weight)
         x = nnx.relu(x)
@@ -155,7 +155,7 @@ def train_step(model: CoraGCN, optimizer: nnx.Optimizer, data: Data):
     return loss
 
 
-def evaluate(model: CoraGCN, data: Data, mask: jnp.ndarray):
+def evaluate(model: CoraGCN, data: Data, mask: jax.Array):
     """Evaluate model on a specific mask."""
     model.eval()
 

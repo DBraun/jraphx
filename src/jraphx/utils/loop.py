@@ -2,17 +2,18 @@
 
 from typing import Union
 
+import jax
 from jax import numpy as jnp
 
 from jraphx.utils.scatter import scatter
 
 
 def add_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     fill_value: Union[float, str] = 1.0,
     num_nodes: int | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+) -> tuple[jax.Array, jax.Array | None]:
     r"""Adds a self-loop :math:`(i,i) \in \mathcal{E}` to every node
     :math:`i \in \mathcal{V}` in the graph given by :attr:`edge_index`.
     In case the graph is weighted or has multi-dimensional edge features
@@ -77,9 +78,9 @@ def add_self_loops(
 
 
 def remove_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
+) -> tuple[jax.Array, jax.Array | None]:
     """Remove self-loops from edge indices.
 
     Args:
@@ -103,11 +104,11 @@ def remove_self_loops(
 
 
 def add_remaining_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     fill_value: float = 1.0,
     num_nodes: int | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+) -> tuple[jax.Array, jax.Array | None]:
     """Add self-loops so that every node carries exactly one.
 
     The self-loops the input already had are removed first, so a duplicated

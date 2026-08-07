@@ -26,7 +26,7 @@ def example_1_vmap_batch_processing():
             self.conv1 = GCNConv(in_features, hidden_dim, rngs=nnx.Rngs(0))
             self.conv2 = GCNConv(hidden_dim, out_dim, rngs=nnx.Rngs(1))
 
-        def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+        def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
             x = self.conv1(x, edge_index)
             x = nnx.relu(x)
             x = self.conv2(x, edge_index)
@@ -71,14 +71,14 @@ def example_2_scan_sequential_layers():
 
             self.layers = create_layers(nnx.Rngs(1))
 
-        def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+        def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
             # Apply first layer
             x = self.first_layer(x, edge_index)
             x = nnx.relu(x)
 
             # Apply remaining layers using scan
             @nnx.scan(in_axes=(0, nnx.Carry, None), out_axes=nnx.Carry)
-            def apply_layer(layer: GCNConv, x: jnp.ndarray, edge_index: jnp.ndarray):
+            def apply_layer(layer: GCNConv, x: jax.Array, edge_index: jax.Array):
                 x = layer(x, edge_index)
                 x = nnx.relu(x)
                 return x
@@ -140,7 +140,7 @@ def example_3_temporal_graph_networks():
                 rngs=rngs,
             )
 
-        def __call__(self, carry: jnp.ndarray, inputs: tuple[jnp.ndarray, jnp.ndarray]):
+        def __call__(self, carry: jax.Array, inputs: tuple[jax.Array, jax.Array]):
             """Process one timestep of the Graph GRU.
 
             Args:
@@ -179,7 +179,7 @@ def example_3_temporal_graph_networks():
 
             return h_new, h_new
 
-        def initialize_carry(self, batch_shape: tuple[int, ...]) -> jnp.ndarray:
+        def initialize_carry(self, batch_shape: tuple[int, ...]) -> jax.Array:
             """Initialize the hidden state.
 
             Args:
@@ -239,7 +239,7 @@ def example_3_temporal_graph_networks():
         def __init__(self, in_features: int, out_features: int, *, rngs: nnx.Rngs):
             self.conv = GCNConv(in_features, out_features, rngs=rngs)
 
-        def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+        def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
             return self.conv(x, edge_index)
 
     # Create graph preprocessor and standard GRU cell
@@ -288,7 +288,7 @@ def example_4_memory_efficient_training():
             self.conv1 = GATConv(in_dim, 32, heads=4, rngs=nnx.Rngs(0))
             self.conv2 = GATConv(32 * 4, out_dim, heads=1, rngs=nnx.Rngs(1))
 
-        def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray):
+        def __call__(self, x: jax.Array, edge_index: jax.Array):
             x = self.conv1(x, edge_index)
             x = nnx.elu(x)
             x = self.conv2(x, edge_index)

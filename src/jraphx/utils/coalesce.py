@@ -1,16 +1,17 @@
 """Edge coalescing utilities for removing duplicate edges."""
 
+import jax
 from jax import numpy as jnp
 
 from jraphx.utils.scatter import scatter
 
 
 def coalesce(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     num_nodes: int | None = None,
     reduce: str = "add",
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+) -> tuple[jax.Array, jax.Array | None]:
     """Row-wise sorts :obj:`edge_index` and removes its duplicated entries.
     Duplicate entries in :obj:`edge_attr` are merged by scattering them
     together according to the given :obj:`reduce` option.

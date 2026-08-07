@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Any
 
-import jax.numpy as jnp
+import jax
 from flax import nnx
 
 from jraphx.nn.conv import MessagePassing
@@ -182,13 +182,13 @@ class BasicGNN(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+        batch: jax.Array | None = None,
         batch_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Forward pass.
 
         Args:

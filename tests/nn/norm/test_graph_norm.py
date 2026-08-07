@@ -193,7 +193,7 @@ def test_graph_norm_jit():
     norm = GraphNorm(4, rngs=nnx.Rngs(0))
 
     @nnx.jit
-    def run(module: GraphNorm, features: jnp.ndarray, batch_vector: jnp.ndarray) -> jnp.ndarray:
+    def run(module: GraphNorm, features: jax.Array, batch_vector: jax.Array) -> jax.Array:
         return module(features, batch_vector, batch_size=2)
 
     out_jit = run(norm, x, batch)
@@ -211,7 +211,7 @@ def test_graph_norm_batch_size_required_under_jit():
     norm = GraphNorm(2, rngs=nnx.Rngs(0))
 
     @nnx.jit
-    def run(module: GraphNorm, features: jnp.ndarray, batch_vector: jnp.ndarray) -> jnp.ndarray:
+    def run(module: GraphNorm, features: jax.Array, batch_vector: jax.Array) -> jax.Array:
         return module(features, batch_vector)
 
     with pytest.raises(jax.errors.ConcretizationTypeError):

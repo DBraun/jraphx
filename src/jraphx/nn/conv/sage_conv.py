@@ -2,6 +2,7 @@
 
 from typing import Literal, Union
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx import Linear, Param, Rngs
@@ -133,11 +134,11 @@ class SAGEConv(MessagePassing):
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray | None]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array | None]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         size: tuple[int, int] | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Forward pass of the GraphSAGE layer.
 
         Args:
@@ -190,10 +191,10 @@ class SAGEConv(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Construct messages from source nodes.
 
         Args:
@@ -208,10 +209,10 @@ class SAGEConv(MessagePassing):
 
     def aggregate(
         self,
-        messages: jnp.ndarray,
-        index: jnp.ndarray,
+        messages: jax.Array,
+        index: jax.Array,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Aggregate messages based on the specified method.
 
         Args:

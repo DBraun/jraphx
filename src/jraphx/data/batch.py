@@ -83,9 +83,9 @@ class Batch(Data):
 
     @dataclass
     class FaceData(Data):
-        face: jnp.ndarray | None = None
-        normal: jnp.ndarray | None = None
-        face_color: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
 
         # flax.struct.dataclass regenerates __eq__ for every subclass, so
         # delegate to keep comparing array fields element-wise
@@ -94,9 +94,9 @@ class Batch(Data):
 
     @dataclass
     class FaceBatch(Batch):
-        face: jnp.ndarray | None = None
-        normal: jnp.ndarray | None = None
-        face_color: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
 
         # Fields containing node indices that need offsetting
         NODE_INDEX_FIELDS: ClassVar[set[str]] = {"face"}

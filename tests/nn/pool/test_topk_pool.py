@@ -48,7 +48,7 @@ def test_topk_pool_gradient_flows_to_projection() -> None:
     """The projection vector receives a nonzero gradient at the default multiplier."""
     pool = _deterministic_pool(ratio=0.5)
 
-    def loss_fn(module: TopKPooling) -> jnp.ndarray:
+    def loss_fn(module: TopKPooling) -> jax.Array:
         return module(X, EDGE_INDEX)[0].sum()
 
     grads = jax.tree.leaves(nnx.grad(loss_fn)(pool))
@@ -178,7 +178,7 @@ def test_topk_pool_min_score_gradient_flows_to_projection() -> None:
     """The min_score branch also gates features, so the projection is trainable."""
     pool = _deterministic_pool(min_score=0.1)
 
-    def loss_fn(module: TopKPooling) -> jnp.ndarray:
+    def loss_fn(module: TopKPooling) -> jax.Array:
         return module(X, EDGE_INDEX)[0].sum()
 
     grads = jax.tree.leaves(nnx.grad(loss_fn)(pool))
@@ -223,7 +223,7 @@ def test_sag_pool_gradient_flows_to_scorer(gnn: str) -> None:
     """The scoring GNN receives a nonzero gradient at the default multiplier."""
     pool = SAGPooling(2, ratio=0.5, gnn=gnn, rngs=nnx.Rngs(0))
 
-    def loss_fn(module: SAGPooling) -> jnp.ndarray:
+    def loss_fn(module: SAGPooling) -> jax.Array:
         return module(X, EDGE_INDEX)[0].sum()
 
     grads = jax.tree.leaves(nnx.grad(loss_fn)(pool))

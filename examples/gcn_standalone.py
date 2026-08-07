@@ -50,9 +50,7 @@ class GCNConv(nnx.Module):
         self.linear = nnx.Linear(in_features, out_features, use_bias=False, rngs=rngs)
         self.bias = nnx.Param(jnp.zeros((out_features,)))
 
-    def __call__(
-        self, x: jnp.ndarray, edge_index: jnp.ndarray, num_nodes: int = None
-    ) -> jnp.ndarray:
+    def __call__(self, x: jax.Array, edge_index: jax.Array, num_nodes: int = None) -> jax.Array:
         """
         Forward pass of GCN layer.
 
@@ -115,7 +113,7 @@ class SimpleGCN(nnx.Module):
         self.conv2 = GCNConv(hidden_features, out_features, rngs=rngs)
         self.dropout = nnx.Dropout(0.5, rngs=rngs)
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
         # First GCN layer with ReLU activation
         x = self.conv1(x, edge_index)
         x = nnx.relu(x)

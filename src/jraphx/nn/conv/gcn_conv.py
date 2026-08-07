@@ -1,5 +1,6 @@
 """Graph Convolutional Network (GCN) layer implementation with optimizations."""
 
+import jax
 from flax import nnx
 from flax.nnx import Linear, Param, Rngs, Variable
 from jax import numpy as jnp
@@ -11,11 +12,11 @@ from jraphx.utils.num_nodes import maybe_num_nodes
 
 
 def _add_remaining_self_loops(
-    edge_index: jnp.ndarray,
-    edge_weight: jnp.ndarray,
+    edge_index: jax.Array,
+    edge_weight: jax.Array,
     fill_value: float,
     num_nodes: int,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jax.Array, jax.Array]:
     """Give every node exactly one self-loop, keeping the weight it already has.
 
     One loop :math:`(i, i)` is appended for each of the ``num_nodes`` nodes. An
@@ -177,8 +178,8 @@ class GCNConv(MessagePassing):
 
         # Cache for normalized edge weights (for static graphs). The variables hold
         # None until `precompute_norm` fills them.
-        self._cached_edge_index: Variable[jnp.ndarray | None] | None
-        self._cached_edge_weight: Variable[jnp.ndarray | None] | None
+        self._cached_edge_index: Variable[jax.Array | None] | None
+        self._cached_edge_weight: Variable[jax.Array | None] | None
         if cached:
             self._cached_edge_index = Variable(None)
             self._cached_edge_weight = Variable(None)
@@ -192,13 +193,13 @@ class GCNConv(MessagePassing):
 
     def gcn_norm(
         self,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
         num_nodes: int | None = None,
         improved: bool = False,
         add_self_loops: bool = True,
         dtype: jnp.dtype | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+    ) -> tuple[jax.Array, jax.Array]:
         """Apply symmetric GCN normalization to edge weights.
 
         The normalized weight of edge :math:`(j, i)` is
@@ -259,8 +260,8 @@ class GCNConv(MessagePassing):
 
     def precompute_norm(
         self,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
         num_nodes: int | None = None,
         dtype: jnp.dtype | None = None,
     ) -> None:
@@ -306,7 +307,7 @@ class GCNConv(MessagePassing):
         self._cached_edge_weight.set_value(edge_weight)
         self._cached_num_nodes = num_nodes
 
-    def _get_cached_edge_weight(self, num_nodes: int) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def _get_cached_edge_weight(self, num_nodes: int) -> tuple[jax.Array, jax.Array]:
         """Read the precomputed normalization.
 
         Args:
@@ -347,10 +348,10 @@ class GCNConv(MessagePassing):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_weight: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_weight: jax.Array | None = None,
+    ) -> jax.Array:
         """Forward pass of the GCN layer with optimizations.
 
         Args:

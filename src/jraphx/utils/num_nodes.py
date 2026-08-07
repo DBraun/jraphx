@@ -1,10 +1,10 @@
 """Utilities for inferring the number of nodes in a graph."""
 
-from jax import numpy as jnp
+import jax
 
 
 def maybe_num_nodes(
-    edge_index: jnp.ndarray,
+    edge_index: jax.Array,
     num_nodes: int | None = None,
 ) -> int:
     r"""Returns the number of nodes in the graph given by :attr:`edge_index`.

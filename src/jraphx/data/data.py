@@ -2,6 +2,7 @@
 
 import dataclasses
 
+import jax
 from flax.struct import dataclass
 from jax import numpy as jnp
 
@@ -48,7 +49,7 @@ class Data:
     ```python
     @dataclass
     class MyData(Data):
-        custom_attr: jnp.ndarray | None = None
+        custom_attr: jax.Array | None = None
 
         # flax.struct.dataclass regenerates __eq__ for every subclass, so
         # delegate to keep comparing array fields element-wise
@@ -70,13 +71,13 @@ class Data:
         Use the replace() method to create modified instances.
     """
 
-    x: jnp.ndarray | None = None
-    edge_index: jnp.ndarray | None = None
-    edge_attr: jnp.ndarray | None = None
-    y: jnp.ndarray | None = None
-    pos: jnp.ndarray | None = None
-    batch: jnp.ndarray | None = None
-    ptr: jnp.ndarray | None = None
+    x: jax.Array | None = None
+    edge_index: jax.Array | None = None
+    edge_attr: jax.Array | None = None
+    y: jax.Array | None = None
+    pos: jax.Array | None = None
+    batch: jax.Array | None = None
+    ptr: jax.Array | None = None
 
     @property
     def num_nodes(self) -> int:
@@ -142,7 +143,7 @@ class Data:
 
         src, dst = self.edge_index[0], self.edge_index[1]
 
-        def lexsorted(row: jnp.ndarray, col: jnp.ndarray) -> jnp.ndarray:
+        def lexsorted(row: jax.Array, col: jax.Array) -> jax.Array:
             order = jnp.lexsort((col, row))
             return jnp.stack([row[order], col[order]])
 

@@ -19,12 +19,12 @@ from .scatter import (
 
 
 def scatter_softmax(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     temperature: float = 1.0,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes softmax over values grouped by index.
 
     For each group of values sharing the same index, computes:
@@ -54,7 +54,7 @@ def scatter_softmax(
         # Group 0: softmax([1.0, 2.0]) = [0.27, 0.73]
         # Group 1: softmax([3.0, 1.5]) = [0.82, 0.18]
     """
-    out: jnp.ndarray = _scatter_softmax(
+    out: jax.Array = _scatter_softmax(
         src, index, _resolve_dim_size(index, dim_size), dim, temperature
     )
     return out
@@ -62,12 +62,12 @@ def scatter_softmax(
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
 def _scatter_softmax(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
     temperature: float,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_softmax` with a static ``dim_size``.
 
     Args:
@@ -118,12 +118,12 @@ def _scatter_softmax(
 
 
 def scatter_log_softmax(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int | None = None,
     dim: int = -2,
     temperature: float = 1.0,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes log-softmax over values grouped by index.
 
     For each group of values sharing the same index, computes:
@@ -154,7 +154,7 @@ def scatter_log_softmax(
         # Group 0: log_softmax([1.0, 2.0])
         # Group 1: log_softmax([3.0, 1.5])
     """
-    out: jnp.ndarray = _scatter_log_softmax(
+    out: jax.Array = _scatter_log_softmax(
         src, index, _resolve_dim_size(index, dim_size), dim, temperature
     )
     return out
@@ -162,12 +162,12 @@ def scatter_log_softmax(
 
 @partial(jax.jit, static_argnames=("dim_size", "dim"))
 def _scatter_log_softmax(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
+    src: jax.Array,
+    index: jax.Array,
     dim_size: int,
     dim: int,
     temperature: float,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Jitted core of :func:`scatter_log_softmax` with a static ``dim_size``.
 
     Args:
@@ -205,13 +205,13 @@ def _scatter_log_softmax(
 
 
 def masked_scatter_softmax(
-    src: jnp.ndarray,
-    index: jnp.ndarray,
-    mask: jnp.ndarray | None = None,
+    src: jax.Array,
+    index: jax.Array,
+    mask: jax.Array | None = None,
     dim_size: int | None = None,
     dim: int = -2,
     temperature: float = 1.0,
-) -> jnp.ndarray:
+) -> jax.Array:
     """Computes masked softmax over values grouped by index.
 
     Similar to scatter_softmax but with optional masking to exclude

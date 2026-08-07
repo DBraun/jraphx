@@ -6,6 +6,7 @@ using JAX's efficient indexing and gathering operations.
 
 from typing import Any, Literal, Union
 
+import jax
 import jax.numpy as jnp
 from flax.nnx import Module
 from jax.core import Tracer
@@ -15,12 +16,12 @@ from jraphx.utils.scatter import scatter_add, scatter_max, scatter_mean, scatter
 
 
 def _add_attention_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None,
     fill_value: Union[float, str],
     num_src_nodes: int,
     num_dst_nodes: int,
-) -> tuple[jnp.ndarray, jnp.ndarray | None, jnp.ndarray]:
+) -> tuple[jax.Array, jax.Array | None, jax.Array]:
     r"""Insert one self-loop per node and flag the loops that were already present.
 
     Attention layers make every node attend to itself by appending a loop
@@ -63,7 +64,7 @@ def _add_attention_self_loops(
     return edge_index, edge_attr, mask
 
 
-def _validate_index_range(index: jnp.ndarray, num_nodes: int, role: str) -> None:
+def _validate_index_range(index: jax.Array, num_nodes: int, role: str) -> None:
     """Check that gather indices address an existing row of a node table.
 
     :func:`jax.numpy.take` fills out-of-range positions with ``NaN`` instead of
@@ -146,11 +147,11 @@ class MessagePassing(Module):
 
     def propagate(
         self,
-        edge_index: jnp.ndarray,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_attr: jnp.ndarray | None = None,
+        edge_index: jax.Array,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_attr: jax.Array | None = None,
         size: tuple[int, int] | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Main propagation step that orchestrates message passing.
 
         Messages travel from source nodes :math:`j` to target nodes :math:`i`.
@@ -229,10 +230,10 @@ class MessagePassing(Module):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Construct messages from source nodes j to target nodes i.
 
         Args:
@@ -248,10 +249,10 @@ class MessagePassing(Module):
 
     def aggregate(
         self,
-        messages: jnp.ndarray,
-        index: jnp.ndarray,
+        messages: jax.Array,
+        index: jax.Array,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Aggregate messages at target nodes using optimized scatter operations.
 
         Args:
@@ -276,9 +277,9 @@ class MessagePassing(Module):
 
     def update(
         self,
-        aggr_out: jnp.ndarray,
-        x: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        aggr_out: jax.Array,
+        x: jax.Array | None = None,
+    ) -> jax.Array:
         """Update node embeddings after aggregation.
 
         Args:
@@ -293,11 +294,11 @@ class MessagePassing(Module):
 
     def message_and_aggregate(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Fused message and aggregation for efficiency.
 
         The base class provides no fused path and always raises; override this
@@ -357,10 +358,10 @@ class MessagePassing(Module):
 
 
 def create_edge_index_with_padding(
-    edge_index: jnp.ndarray,
+    edge_index: jax.Array,
     num_nodes: int,
     max_edges: int,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jax.Array, jax.Array]:
     """Create padded edge indices for fixed-size batching.
 
     This is useful for JAX operations that require fixed shapes

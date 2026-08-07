@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import jax.random as random
 import pytest
@@ -142,7 +143,7 @@ def test_batch_norm_jit_with_batch():
     norm = BatchNorm(4, track_running_stats=True, rngs=nnx.Rngs(0))
 
     @nnx.jit
-    def run(module: BatchNorm, features: jnp.ndarray, batch_vector: jnp.ndarray) -> jnp.ndarray:
+    def run(module: BatchNorm, features: jax.Array, batch_vector: jax.Array) -> jax.Array:
         return module(features, batch_vector)
 
     out = run(norm, x, batch)

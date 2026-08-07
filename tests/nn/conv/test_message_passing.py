@@ -17,10 +17,10 @@ class CountingMP(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Return the source features and record the invocation."""
         self.message_calls += 1
         return x_j
@@ -29,7 +29,7 @@ class CountingMP(MessagePassing):
 class SumUpdateMP(MessagePassing):
     """Probe whose :meth:`update` combines the aggregate with the target table."""
 
-    def update(self, aggr_out: jnp.ndarray, x: jnp.ndarray | None = None) -> jnp.ndarray:
+    def update(self, aggr_out: jax.Array, x: jax.Array | None = None) -> jax.Array:
         """Add the original target features to the aggregated messages."""
         return aggr_out + x
 
@@ -39,20 +39,20 @@ class FusedMP(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Fail loudly: the fused path must bypass this method."""
         raise RuntimeError("message() must not be called when message_and_aggregate is overridden")
 
     def message_and_aggregate(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Return a constant of the aggregated shape."""
         return jnp.full((dim_size, x.shape[-1]), 7.0)
 
@@ -68,11 +68,11 @@ class RawArgsFusedMP(MessagePassing):
 
     def message_and_aggregate(
         self,
-        x: jnp.ndarray | tuple[jnp.ndarray, jnp.ndarray],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: jax.Array | tuple[jax.Array, jax.Array],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Scatter the source rows of ``x`` into the target set of ``edge_index``."""
         x_src = x[0] if isinstance(x, tuple) else x
         self.x_was_tuple = isinstance(x, tuple)
@@ -81,7 +81,7 @@ class RawArgsFusedMP(MessagePassing):
         out = jnp.zeros((dim_size, x_src.shape[-1]), dtype=x_src.dtype)
         return out.at[edge_index[1]].add(x_src[edge_index[0]])
 
-    def update(self, aggr_out: jnp.ndarray, x: jnp.ndarray | None = None) -> jnp.ndarray:
+    def update(self, aggr_out: jax.Array, x: jax.Array | None = None) -> jax.Array:
         """Offset the fused result to show that :meth:`update` still runs."""
         return aggr_out + 1.0
 
@@ -93,7 +93,7 @@ class CountingMLP(nnx.Module):
         self.lin = nnx.Linear(in_features, out_features, rngs=rngs)
         self.calls = 0
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jax.Array) -> jax.Array:
         """Apply the linear layer and record the invocation."""
         self.calls += 1
         return self.lin(x)
@@ -195,10 +195,10 @@ def test_stateful_message_submodule_runs_once():
 
         def message(
             self,
-            x_j: jnp.ndarray,
-            x_i: jnp.ndarray | None = None,
-            edge_attr: jnp.ndarray | None = None,
-        ) -> jnp.ndarray:
+            x_j: jax.Array,
+            x_i: jax.Array | None = None,
+            edge_attr: jax.Array | None = None,
+        ) -> jax.Array:
             return self.nn(x_j)
 
     conv = SubmoduleMP(rngs=nnx.Rngs(0))
@@ -296,7 +296,7 @@ def test_propagate_bipartite_under_jit():
     edge_index = jnp.array([[0, 1, 2], [0, 1, 1]])
 
     @jax.jit
-    def run(x_src: jnp.ndarray, x_dst: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def run(x_src: jax.Array, x_dst: jax.Array, edge_index: jax.Array) -> jax.Array:
         return conv.propagate(edge_index, (x_src, x_dst))
 
     out = run(x_src, x_dst, edge_index)

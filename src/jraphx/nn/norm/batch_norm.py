@@ -1,5 +1,6 @@
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.module import first_from
@@ -124,12 +125,12 @@ class BatchNorm(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
         *,
         use_running_average: bool | None = None,
-        mask: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        mask: jax.Array | None = None,
+    ) -> jax.Array:
         """Apply batch normalization.
 
         Args:

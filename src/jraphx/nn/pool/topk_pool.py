@@ -16,7 +16,7 @@ _MIN_SCORE_TOL = 1e-7
 _NONLINEARITIES = ("tanh", "sigmoid")
 
 
-def _apply_nonlinearity(scores: jnp.ndarray, nonlinearity: str) -> jnp.ndarray:
+def _apply_nonlinearity(scores: jax.Array, nonlinearity: str) -> jax.Array:
     """Apply the configured score nonlinearity.
 
     Args:
@@ -39,9 +39,7 @@ def _apply_nonlinearity(scores: jnp.ndarray, nonlinearity: str) -> jnp.ndarray:
         )
 
 
-def _segment_softmax(
-    scores: jnp.ndarray, batch: jnp.ndarray | None, num_segments: int
-) -> jnp.ndarray:
+def _segment_softmax(scores: jax.Array, batch: jax.Array | None, num_segments: int) -> jax.Array:
     """Compute a numerically stable softmax over the nodes of each graph.
 
     Args:
@@ -182,10 +180,10 @@ class TopKPooling(nnx.Module):
 
     def _score(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Compute raw (pre-activation) node scores from the learnable projection.
 
         The projection :math:`\\mathbf{X}\\mathbf{p}` is divided by :math:`\\|\\mathbf{p}\\|`
@@ -220,9 +218,7 @@ class TopKPooling(nnx.Module):
             return min(self.ratio, num_nodes)
         return min(num_nodes, math.ceil(self.ratio * num_nodes))
 
-    def _topk_perm(
-        self, scores: jnp.ndarray, batch: jnp.ndarray | None, num_nodes: int
-    ) -> jnp.ndarray:
+    def _topk_perm(self, scores: jax.Array, batch: jax.Array | None, num_nodes: int) -> jax.Array:
         """Select the highest scoring nodes of every graph.
 
         Args:
@@ -254,8 +250,8 @@ class TopKPooling(nnx.Module):
         return jnp.concatenate(perm_list)
 
     def _select(
-        self, raw_scores: jnp.ndarray, batch: jnp.ndarray | None, num_nodes: int
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        self, raw_scores: jax.Array, batch: jax.Array | None, num_nodes: int
+    ) -> tuple[jax.Array, jax.Array]:
         """Turn raw node scores into gating scores and selected node indices.
 
         Args:
@@ -283,11 +279,11 @@ class TopKPooling(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-        batch: jnp.ndarray | None = None,
-    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None, jnp.ndarray | None, jnp.ndarray]:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
+        batch: jax.Array | None = None,
+    ) -> tuple[jax.Array, jax.Array, jax.Array | None, jax.Array | None, jax.Array]:
         """Apply Top-K pooling.
 
         Args:
@@ -395,10 +391,10 @@ class SAGPooling(TopKPooling):
 
     def _score(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Compute raw (pre-activation) structure-aware node scores.
 
         Args:

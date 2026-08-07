@@ -1,5 +1,6 @@
 from typing import Literal
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -144,10 +145,10 @@ class TransformerConv(MessagePassing):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Forward pass of TransformerConv.
 
         Args:
@@ -193,12 +194,12 @@ class TransformerConv(MessagePassing):
 
     def _propagate_transformer(
         self,
-        edge_index: jnp.ndarray,
-        query: jnp.ndarray,
-        key: jnp.ndarray,
-        value: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        edge_index: jax.Array,
+        query: jax.Array,
+        key: jax.Array,
+        value: jax.Array,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Custom propagation for transformer attention."""
         # Get source and target indices
         row, col = edge_index[0], edge_index[1]
@@ -226,14 +227,14 @@ class TransformerConv(MessagePassing):
 
     def _attention_message(
         self,
-        query_i: jnp.ndarray,
-        key_j: jnp.ndarray,
-        value_j: jnp.ndarray,
-        index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-        ptr: jnp.ndarray | None = None,
+        query_i: jax.Array,
+        key_j: jax.Array,
+        value_j: jax.Array,
+        index: jax.Array,
+        edge_attr: jax.Array | None = None,
+        ptr: jax.Array | None = None,
         size_i: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Compute messages with attention weights.
 
         This layer computes attention over pre-projected query/key/value tensors

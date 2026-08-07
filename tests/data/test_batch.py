@@ -14,9 +14,9 @@ from jraphx.data import Batch, Data
 class FaceData(Data):
     """A Data subclass carrying triangle connectivity and per-face attributes."""
 
-    face: jnp.ndarray | None = None
-    normal: jnp.ndarray | None = None
-    label: jnp.ndarray | None = None
+    face: jax.Array | None = None
+    normal: jax.Array | None = None
+    label: jax.Array | None = None
 
     def __eq__(self, other: object) -> bool:
         """Delegate to the base class so array fields compare element-wise."""
@@ -27,9 +27,9 @@ class FaceData(Data):
 class FaceBatch(Batch):
     """A Batch subclass declaring how the extra FaceData fields are collated."""
 
-    face: jnp.ndarray | None = None
-    normal: jnp.ndarray | None = None
-    label: jnp.ndarray | None = None
+    face: jax.Array | None = None
+    normal: jax.Array | None = None
+    label: jax.Array | None = None
 
     NODE_INDEX_FIELDS: ClassVar[set[str]] = {"face"}
     ELEMENT_LEVEL_FIELDS: ClassVar[set[str]] = {"normal"}
@@ -492,13 +492,13 @@ def test_primary_index_field_is_deterministic():
 
     @dataclass
     class TwoIndexData(Data):
-        face: jnp.ndarray | None = None
-        tetra: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        tetra: jax.Array | None = None
 
     @dataclass
     class TwoIndexBatch(Batch):
-        face: jnp.ndarray | None = None
-        tetra: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        tetra: jax.Array | None = None
 
         NODE_INDEX_FIELDS: ClassVar[set[str]] = {"tetra", "face"}
         _DATA_CLASS: ClassVar[type | None] = TwoIndexData

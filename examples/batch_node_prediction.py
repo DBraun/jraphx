@@ -242,7 +242,7 @@ class NodePredictionGCN(nnx.Module):
         )
         self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
         """Forward pass.
 
         Args:
@@ -259,7 +259,7 @@ class NodePredictionGCN(nnx.Module):
         return x
 
 
-def compute_metrics(y_pred: jnp.ndarray, y_true: jnp.ndarray) -> dict[str, jnp.ndarray]:
+def compute_metrics(y_pred: jax.Array, y_true: jax.Array) -> dict[str, jax.Array]:
     """Compute regression metrics."""
     mse = jnp.mean((y_pred - y_true) ** 2)
     mae = jnp.mean(jnp.abs(y_pred - y_true))
@@ -274,8 +274,8 @@ def compute_metrics(y_pred: jnp.ndarray, y_true: jnp.ndarray) -> dict[str, jnp.n
 
 @nnx.jit
 def train_step(
-    model: NodePredictionGCN, optimizer: nnx.Optimizer, batch: dict[str, jnp.ndarray]
-) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+    model: NodePredictionGCN, optimizer: nnx.Optimizer, batch: dict[str, jax.Array]
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Single training step with JIT compilation."""
 
     def loss_fn(model):
@@ -291,7 +291,7 @@ def train_step(
 
 
 @nnx.jit
-def eval_step(model: NodePredictionGCN, batch: dict[str, jnp.ndarray]) -> dict[str, jnp.ndarray]:
+def eval_step(model: NodePredictionGCN, batch: dict[str, jax.Array]) -> dict[str, jax.Array]:
     """Single evaluation step with JIT compilation."""
     predictions = model(batch["x"], batch["edge_index"])
     metrics = compute_metrics(predictions, batch["y"])

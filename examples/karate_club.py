@@ -32,7 +32,7 @@ from jraphx.nn.conv import GCNConv
 
 @dataclass
 class Data(jraphx.Data):
-    train_mask: jnp.ndarray | None = None
+    train_mask: jax.Array | None = None
 
 
 # Import PyTorch Geometric for dataset
@@ -85,7 +85,7 @@ class KarateGCN(nnx.Module):
         )
         self.dropout = nnx.Dropout(0.5, rngs=rngs)
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
         # First layer
         x = self.conv1(x, edge_index)
         x = nnx.relu(x)
@@ -97,7 +97,7 @@ class KarateGCN(nnx.Module):
         return x
 
 
-def train_step(model: KarateGCN, optimizer: nnx.Optimizer, data: Data, train_mask: jnp.ndarray):
+def train_step(model: KarateGCN, optimizer: nnx.Optimizer, data: Data, train_mask: jax.Array):
     """Training step with masked loss."""
     model.train()  # Set model to training mode
 
@@ -116,7 +116,7 @@ def train_step(model: KarateGCN, optimizer: nnx.Optimizer, data: Data, train_mas
     return loss
 
 
-def evaluate(model: KarateGCN, data: Data, mask: jnp.ndarray = None):
+def evaluate(model: KarateGCN, data: Data, mask: jax.Array = None):
     """Evaluate model accuracy."""
     model.eval()
 

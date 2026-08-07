@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Union
 
-import jax.numpy as jnp
+import jax
 from flax import nnx
 
 from jraphx.nn.norm import BatchNorm, LayerNorm
@@ -172,10 +172,10 @@ class MLP(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
         batch_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Forward pass.
 
         Args:

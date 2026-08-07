@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import jax.random as random
 import pytest
@@ -195,7 +196,7 @@ def test_layer_norm_graph_mode_jit():
     norm = LayerNorm(4, mode="graph", rngs=nnx.Rngs(0))
 
     @nnx.jit
-    def run(module: LayerNorm, features: jnp.ndarray, batch_vector: jnp.ndarray) -> jnp.ndarray:
+    def run(module: LayerNorm, features: jax.Array, batch_vector: jax.Array) -> jax.Array:
         return module(features, batch_vector, batch_size=2)
 
     assert jnp.allclose(run(norm, x, batch), norm(x, batch), atol=1e-5)

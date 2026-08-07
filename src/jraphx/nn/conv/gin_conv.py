@@ -2,6 +2,7 @@
 
 from typing import Union
 
+import jax
 import jax.numpy as jnp
 from flax.nnx import Module, Param, Rngs
 
@@ -66,10 +67,10 @@ class GINConv(MessagePassing):
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Forward pass of the GIN layer.
 
         Args:
@@ -83,7 +84,7 @@ class GINConv(MessagePassing):
             [num_dst_nodes, out_features] for bipartite input
         """
         # Get epsilon value
-        eps: jnp.ndarray | float
+        eps: jax.Array | float
         if isinstance(self.eps, Param):
             eps = self.eps[0]
         else:
@@ -102,16 +103,16 @@ class GINConv(MessagePassing):
         out = (1 + eps) * x_dst + out
 
         # Apply MLP
-        out_features: jnp.ndarray = self.nn(out)
+        out_features: jax.Array = self.nn(out)
 
         return out_features
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Construct messages from source nodes.
 
         Args:

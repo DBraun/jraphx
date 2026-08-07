@@ -2,6 +2,7 @@
 
 from typing import Literal, Union, overload
 
+import jax
 from flax import nnx
 from flax.nnx import Dropout, Linear, Param, Rngs, initializers
 from jax import numpy as jnp
@@ -203,32 +204,32 @@ class GATConv(MessagePassing):
     @overload
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = ...,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = ...,
         size: tuple[int, int] | None = ...,
         return_attention_weights: Literal[False] = ...,
-    ) -> jnp.ndarray: ...
+    ) -> jax.Array: ...
 
     @overload
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = ...,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = ...,
         size: tuple[int, int] | None = ...,
         *,
         return_attention_weights: Literal[True],
-    ) -> tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]: ...
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]: ...
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         size: tuple[int, int] | None = None,
         return_attention_weights: bool = False,
-    ) -> Union[jnp.ndarray, tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]]:
+    ) -> Union[jax.Array, tuple[jax.Array, tuple[jax.Array, jax.Array]]]:
         """Forward pass of the GAT layer.
 
         Args:
@@ -245,8 +246,8 @@ class GATConv(MessagePassing):
         """
         # Handle bipartite graphs
         res = None
-        x_src: jnp.ndarray
-        x_dst: jnp.ndarray | None
+        x_src: jax.Array
+        x_dst: jax.Array | None
         if isinstance(x, tuple):
             x_src, x_dst = x
             # Handle case where x_dst is None (source nodes only)

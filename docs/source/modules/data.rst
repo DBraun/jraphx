@@ -145,18 +145,18 @@ The Data subclass will have easy-to-understand additional fields. The correspond
     @dataclass
     class FaceData(Data):
         """Data class for 3D mesh graphs with face connectivity."""
-        face: jnp.ndarray | None = None       # Face connectivity [3, num_faces]
-        pos: jnp.ndarray | None = None        # 3D node positions
-        normal: jnp.ndarray | None = None     # Face normals
-        face_color: jnp.ndarray | None = None # Face colors
+        face: jax.Array | None = None       # Face connectivity [3, num_faces]
+        pos: jax.Array | None = None        # 3D node positions
+        normal: jax.Array | None = None     # Face normals
+        face_color: jax.Array | None = None # Face colors
 
     @dataclass
     class FaceBatch(jraphx.Batch):
         """Batch class for 3D mesh graphs."""
-        face: jnp.ndarray | None = None
-        pos: jnp.ndarray | None = None
-        normal: jnp.ndarray | None = None
-        face_color: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        pos: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
 
         # Configure batching behavior as class attributes. Only `normal` and
         # `face_color` are element-level: they have one row per *face*, so they align
@@ -220,18 +220,18 @@ Example: Molecular Graphs
     @dataclass
     class MolecularData(Data):
         """Data class for molecular graphs."""
-        bond_index: jnp.ndarray | None = None  # Bond connectivity
-        bond_type: jnp.ndarray | None = None   # Bond type features
-        atom_charge: jnp.ndarray | None = None # Node-level charges
+        bond_index: jax.Array | None = None  # Bond connectivity
+        bond_type: jax.Array | None = None   # Bond type features
+        atom_charge: jax.Array | None = None # Node-level charges
         mol_weight: float | None = None        # Graph-level property
 
     @dataclass
     class MolecularBatch(jraphx.Batch):
         """Batch class for molecular graphs."""
-        bond_index: jnp.ndarray | None = None
-        bond_type: jnp.ndarray | None = None
-        atom_charge: jnp.ndarray | None = None
-        mol_weight: jnp.ndarray | None = None
+        bond_index: jax.Array | None = None
+        bond_type: jax.Array | None = None
+        atom_charge: jax.Array | None = None
+        mol_weight: jax.Array | None = None
 
         # Configure batching behavior as class attributes. `bond_type` is element-level
         # -- one row per bond, aligned with `bond_index`. `atom_charge` has one row per
@@ -286,10 +286,10 @@ When converting from PyTorch Geometric datasets, create a custom Data class:
     @dataclass
     class PyGData(Data):
         """Data class compatible with PyTorch Geometric datasets."""
-        train_mask: jnp.ndarray | None = None
-        val_mask: jnp.ndarray | None = None
-        test_mask: jnp.ndarray | None = None
-        edge_attr: jnp.ndarray | None = None
+        train_mask: jax.Array | None = None
+        val_mask: jax.Array | None = None
+        test_mask: jax.Array | None = None
+        edge_attr: jax.Array | None = None
 
     def from_pyg(pyg_data):
         """Convert PyTorch Geometric data to JraphX format."""
@@ -441,7 +441,7 @@ Common Issues
     # Right - subclass Data
     @dataclass
     class MyData(Data):
-        custom_attr: jnp.ndarray | None = None
+        custom_attr: jax.Array | None = None
 
     data = MyData(x=x, edge_index=edges, custom_attr=value)
 
@@ -456,7 +456,7 @@ Ensure all attributes are JAX-compatible types or mark non-JAX attributes:
     @dataclass
     class DataWithMetadata(Data):
         # JAX array - will be traced
-        features: jnp.ndarray | None = None
+        features: jax.Array | None = None
 
         # Non-JAX metadata - won't be traced
         name: str = struct.field(pytree_node=False, default="")
