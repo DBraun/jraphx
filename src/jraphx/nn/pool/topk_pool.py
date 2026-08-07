@@ -72,8 +72,7 @@ class TopKPooling(nnx.Module):
     If :obj:`min_score` :math:`\tilde{\alpha}` is :obj:`None`, computes:
 
         .. math::
-            \mathbf{y} &= \sigma \left( \frac{\mathbf{X}\mathbf{p}}{\|
-            \mathbf{p} \|} \right)
+            \mathbf{y} &= \frac{\mathbf{X}\mathbf{p}}{\| \mathbf{p} \|}
 
             \mathbf{i} &= \mathrm{top}_k(\mathbf{y})
 
@@ -81,6 +80,10 @@ class TopKPooling(nnx.Module):
             \mathrm{tanh}(\mathbf{y}))_{\mathbf{i}}
 
             \mathbf{A}^{\prime} &= \mathbf{A}_{\mathbf{i},\mathbf{i}}
+
+    where :math:`\mathrm{tanh}` is the default score nonlinearity
+    (:obj:`nonlinearity`) and is applied exactly once, to gate the surviving
+    features and to rank the nodes.
 
     If :obj:`min_score` :math:`\tilde{\alpha}` is a value in :obj:`[0, 1]`,
     computes:

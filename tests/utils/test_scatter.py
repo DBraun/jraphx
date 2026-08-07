@@ -379,3 +379,19 @@ def test_scatter_mean_promotes_integer_input_to_float():
 
     assert jnp.issubdtype(out.dtype, jnp.floating)
     assert jnp.allclose(out[0, 0], 3.0)
+
+
+def test_scatter_logsumexp_does_not_saturate_in_low_precision():
+    """logsumexp over a uniform 600-member bfloat16 segment is log(600).
+
+    The exponential sum is accumulated in at least float32; in bfloat16 it
+    froze at 256 and the result came out log(256) instead.
+    """
+    src = jnp.zeros(600, dtype=jnp.bfloat16)
+    index = jnp.zeros(600, dtype=jnp.int32)
+
+    out = scatter_logsumexp(src, index, dim_size=1)
+
+    assert out.dtype == jnp.bfloat16
+    expected = float(jnp.log(600.0))
+    assert abs(float(out[0]) - expected) < 0.02 * expected

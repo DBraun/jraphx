@@ -83,22 +83,16 @@ class GCN(BasicGNN):
         rngs: nnx.Rngs,
         **kwargs: Any,
     ) -> MessagePassing:
-        """Initialize GCNConv layer."""
-        # Extract GCN-specific parameters
-        improved = kwargs.pop("improved", False)
-        cached = kwargs.pop("cached", False)
-        add_self_loops = kwargs.pop("add_self_loops", True)
-        normalize = kwargs.pop("normalize", True)
+        """Initialize GCNConv layer.
 
+        Every keyword argument reaches the :class:`GCNConv` constructor, so an
+        unsupported one raises a :obj:`TypeError` instead of being dropped.
+        """
         return GCNConv(
             in_features,
             out_features,
-            improved=improved,
-            cached=cached,
-            add_self_loops=add_self_loops,
-            normalize=normalize,
-            bias=True,
             rngs=rngs,
+            **kwargs,
         )
 
 
@@ -185,13 +179,20 @@ class GAT(BasicGNN):
         rngs: nnx.Rngs,
         **kwargs: Any,
     ) -> MessagePassing:
-        """Initialize GATConv or GATv2Conv layer."""
+        """Initialize GATConv or GATv2Conv layer.
+
+        Remaining keyword arguments (:obj:`negative_slope`,
+        :obj:`add_self_loops`, :obj:`fill_value`, ...) reach the convolution
+        constructor, so an unsupported one raises a :obj:`TypeError` instead of
+        being dropped.
+        """
         Conv = GATv2Conv if self.v2 else GATConv
 
-        # For all but last layer, use multi-head with concat
-        # For last layer (if no JK), use single output
+        # Concatenation is disabled only on a layer that maps straight to the
+        # requested out_features; an embedding model (out_features=None) keeps
+        # concatenating hidden_features // heads narrow heads on its last layer.
         is_last = len(self.convs) == self.num_layers - 1
-        use_concat = self.concat and not (is_last and self.jk_mode is None)
+        use_concat = self.concat and not (is_last and self._is_conv_to_out)
 
         if use_concat:
             # When concatenating, each head produces out_features/heads features
@@ -205,9 +206,13 @@ class GAT(BasicGNN):
             out_features=head_features,
             heads=self.heads,
             concat=use_concat,
+            # The model-level dropout rate also drops attention coefficients
+            # inside each convolution, the GAT paper's primary regularizer.
+            dropout=self.dropout_rate,
             edge_dim=self.edge_dim,
             residual=False,  # We handle residual in BasicGNN
             rngs=rngs,
+            **kwargs,
         )
 
 
@@ -224,7 +229,7 @@ class GraphSAGE(BasicGNN):
         hidden_features: Size of hidden layers
         num_layers: Number of GraphSAGE layers
         out_features: Size of output (if None, uses hidden_features)
-        aggr: Aggregation method ('mean', 'max', 'lstm')
+        aggr: Aggregation method ('mean', 'max', 'gcn')
         dropout_rate: Dropout probability
         act: Non-linear activation function, or None to disable the activation
             entirely (default: jax.nn.relu)
@@ -246,18 +251,16 @@ class GraphSAGE(BasicGNN):
         rngs: nnx.Rngs,
         **kwargs: Any,
     ) -> MessagePassing:
-        """Initialize SAGEConv layer."""
-        # Extract SAGE-specific parameters
-        aggr = kwargs.pop("aggr", "mean")
-        normalize = kwargs.pop("normalize", False)
+        """Initialize SAGEConv layer.
 
+        Every keyword argument reaches the :class:`SAGEConv` constructor, so an
+        unsupported one raises a :obj:`TypeError` instead of being dropped.
+        """
         return SAGEConv(
             in_features,
             out_features,
-            aggr=aggr,
-            normalize=normalize,
-            bias=True,
             rngs=rngs,
+            **kwargs,
         )
 
 
@@ -298,10 +301,12 @@ class GIN(BasicGNN):
         rngs: nnx.Rngs,
         **kwargs: Any,
     ) -> MessagePassing:
-        """Initialize GINConv layer."""
-        # Extract GIN-specific parameters
-        train_eps = kwargs.pop("train_eps", False)
+        """Initialize GINConv layer.
 
+        Remaining keyword arguments (:obj:`eps`, :obj:`train_eps`) reach the
+        :class:`GINConv` constructor, so an unsupported one raises a
+        :obj:`TypeError` instead of being dropped.
+        """
         # GINConv calls its MLP without a batch vector, so GraphNorm would pool
         # statistics over the whole disjoint union; use per-node LayerNorm there
         # and let GraphNorm act between the GIN blocks.
@@ -322,6 +327,6 @@ class GIN(BasicGNN):
 
         return GINConv(
             mlp,
-            train_eps=train_eps,
             rngs=rngs,
+            **kwargs,
         )

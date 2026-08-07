@@ -166,9 +166,10 @@ Trained weights still load (subject to the state-layout notes above), but output
 * ``GATConv``/``GATv2Conv`` size their self-loop set from
   ``min(num_src_nodes, num_dst_nodes)`` on a bipartite graph, matching PyG: a self-loop
   only exists for a node present in both endpoint tables. Sizing it from the target count
-  alone appended loops whose source index was out of range, and :func:`jax.numpy.take`
-  clamps such a read to the last row rather than raising -- several target nodes received
-  the same fabricated message, and a target with no incoming edge acquired a value. Both
+  alone appended loops whose source index was out of range, and JAX's array indexing
+  clamps such an out-of-bounds gather to the last row rather than raising -- several
+  target nodes received the same fabricated message, and a target with no incoming edge
+  acquired a value. Both
   layers now also validate their gather indices and raise :obj:`IndexError`, which
   ``propagate`` already did for the layers that route through it.
 * ``scatter_mean``, ``scatter_std``, ``segment_mean``, ``GraphNorm`` and
@@ -176,14 +177,60 @@ Trained weights still load (subject to the state-layout notes above), but output
   in at least float32, never in a narrower input dtype. bfloat16 carries 8 mantissa bits,
   so its consecutive integers stop at 256 -- ``256 + 1`` rounds back to 256 -- and both
   accumulators froze partway through any segment larger than that, leaving the quotient
-  wrong by a degree-dependent factor. The caller's dtype is still what comes back.
+  wrong by a degree-dependent factor. A floating-point caller's dtype is still what comes
+  back; integer inputs divide to float32, as :func:`jax.numpy.true_divide` would.
+* ``scatter_softmax``, ``scatter_log_softmax`` and ``scatter_logsumexp`` accumulate
+  their per-group exponential sums in at least float32 as well. In bfloat16 the running
+  normalizer froze at 256, so the attention weights of any larger group -- these
+  functions normalize ``GATConv`` and ``TransformerConv`` attention -- summed to
+  substantially more than 1.
 * ``batch_histogram`` assigns each value to the bin whose interval contains it, matching
-  :func:`numpy.histogram`. It previously searched only the *left* edges and from the
-  left, which pushed every value strictly inside a bin one place to the right, left bin 0
-  collecting only values exactly equal to the lower bound, and made the last bin absorb
-  the overflow.
-
-**Bug Fixes**
+  :func:`numpy.histogram`: with an explicit ``min_val``/``max_val`` the values outside
+  the range are dropped, not folded into the edge bins. It previously searched only the
+  *left* edges and from the left, which pushed every value strictly inside a bin one
+  place to the right, left bin 0 collecting only values exactly equal to the lower
+  bound, and made the last bin absorb the overflow. One residual divergence: bin edges
+  are computed in the working precision (float32), so a value exactly on an interior
+  edge can land one bin away from numpy's float64 edges.
+* ``TransformerConv`` matches PyG's parameterization: the output projection that PyG
+  does not have is removed (the forward now ends at the skip/beta combination, as the
+  docstring formula always claimed), the fused query/key/value projection carries a
+  bias like PyG's three ``Linear`` layers, heads are concatenated or averaged *before*
+  the skip term, and ``lin_skip``/``lin_beta`` are sized for the final output width
+  under ``concat=False``. ``beta=True`` now requires ``root_weight=True`` and is
+  ignored otherwise -- gating against the node's raw value projection mixed a
+  transformed root feature into every row of a layer documented not to have one, and
+  gave an isolated node a nonzero output where PyG yields zero.
+* The ``GAT`` model concatenates ``hidden_features // heads`` narrow heads on its last
+  layer when ``out_features`` is :obj:`None`, as PyG's ``BasicGNN`` does; it previously
+  averaged full-width heads into the same output shape, hiding a different architecture
+  and parameterization. It also forwards its ``dropout_rate`` into every
+  ``GATConv``/``GATv2Conv`` as attention dropout, the GAT paper's primary regularizer.
+* The ``GCN``/``GAT``/``GraphSAGE``/``GIN`` models forward their remaining keyword
+  arguments to the convolution constructors, so ``GCN(..., bias=False)``,
+  ``GIN(..., eps=0.7)`` and ``GAT(..., add_self_loops=False)`` take effect and an
+  unsupported argument raises ``TypeError``. All of these were silently discarded.
+* ``GATConv``/``GATv2Conv`` with a bipartite ``(x_src, None)`` input omit the target
+  attention term, as PyG does. Both layers previously gathered the *source* table at
+  target indices to fabricate target features, changing every attention weight.
+* ``GATv2Conv`` defaults ``fill_value`` to ``"mean"``, matching PyG and ``GATConv``;
+  self-loop edge features were previously zero-filled.
+* ``global_sort_pool`` sorts by the **last feature channel** (the DGCNN SortPooling
+  operator, PyG's ``SortAggregation``) instead of by the feature sum, and zero-pads
+  small graphs *after* selection, so padding can no longer outrank real nodes whose
+  sort scores are negative.
+* ``in_degree``/``out_degree`` size their result by every node the full ``edge_index``
+  mentions. Inferring the count from the counted row alone silently truncated the
+  vector whenever a node appeared only at the other endpoint.
+* ``Data.is_directed`` compares the lexicographically sorted edge list with its
+  reverse, making it exact at any graph size and multiset-correct for duplicated
+  edges. The previous ``src * num_nodes + dst`` packing wrapped int32 above ~46k nodes
+  -- the same overflow fixed in ``coalesce`` -- and its set semantics called a graph
+  with an unbalanced duplicated edge undirected.
+* ``add_remaining_self_loops`` gives every node exactly one self-loop: existing loops
+  are removed first (collapsing duplicates), the per-node loops are appended in node
+  order, and a replaced loop keeps its attribute. Duplicated input loops were
+  previously all retained, where PyG collapses them.
 
 * ``global_max_pool``/``global_min_pool``/``global_mean_pool`` keep the rank of the node
   features: a 1-D input ``[num_nodes]`` pools to ``[batch_size]``, and inputs such as
@@ -200,6 +247,10 @@ Trained weights still load (subject to the state-layout notes above), but output
 * ``SAGEConv`` accepts the ``(x_src, None)`` bipartite pair again, and ``EdgeConv`` and
   ``GINConv`` accept the ``(x_src, x_dst)`` tuples their docstrings advertise.
 * ``add_self_loops`` with a string ``fill_value`` no longer requires ``num_nodes``.
+* ``Batch`` subclasses with several ``NODE_INDEX_FIELDS`` pick their primary index
+  field alphabetically instead of by set iteration order, which varied with the
+  per-process hash seed and made the same legitimate data list collate in one process
+  and raise ``RuntimeError`` in another.
 
 **Other Changes**
 
@@ -248,6 +299,20 @@ Trained weights still load (subject to the state-layout notes above), but output
   broadcast inputs, whose mutations Flax discards, so its "memory-efficient training"
   never updated a parameter; it now steps through the mini-batches and asserts that the
   loss falls.
+* A third documentation pass, executing every snippet it touched. The flagship
+  :doc:`/get_started/introduction` training and evaluation examples boolean-indexed
+  traced arrays under :func:`nnx.jit` and crashed on their first call; they now weight
+  the per-node loss by the mask. :doc:`/modules/pooling` claimed ``TopKPooling`` is
+  JIT-compatible directly above the note explaining why it is not; the section now
+  pools eagerly and jits the dense computation after it. Also fixed: a
+  ``jraphx.data.DataLoader`` import that does not exist, a ``DeepGNN`` example calling
+  its ``Data``-taking model with two arrays, a vmap snippet feeding 16-feature graphs
+  to the page's 2-feature model, four constructor calls missing the required ``rngs``,
+  a snippet using ``jax.random`` without importing it, and docstrings advertising an
+  ``aggr="lstm"`` that raises ``NotImplementedError``, a bipartite ``TransformerConv``
+  input the code cannot accept, a ``TopKPooling`` formula applying its score
+  nonlinearity twice, and a ``JumpingKnowledge`` "bi-directional LSTM" that is
+  implemented as two GRU cells.
 
 Version 0.0.4
 -------------

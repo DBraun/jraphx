@@ -56,6 +56,9 @@ def in_degree(
     Returns:
         Node in-degrees [num_nodes]
     """
+    # Size the result by every node the graph mentions: a node appearing only
+    # as a source has in-degree zero, not a missing row.
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
     return degree(edge_index[1], num_nodes, dtype)
 
 
@@ -74,4 +77,7 @@ def out_degree(
     Returns:
         Node out-degrees [num_nodes]
     """
+    # Size the result by every node the graph mentions: a node appearing only
+    # as a target has out-degree zero, not a missing row.
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
     return degree(edge_index[0], num_nodes, dtype)

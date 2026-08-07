@@ -157,3 +157,31 @@ def test_scatter_softmax_rejects_unsupported_dim():
     """Only scattering along the leading dimension is implemented."""
     with pytest.raises(NotImplementedError):
         scatter_softmax(jnp.array([1.0, 2.0]), jnp.array([0, 0]), dim_size=1, dim=2)
+
+
+def test_scatter_softmax_does_not_saturate_in_low_precision():
+    """A 600-member bfloat16 group still normalizes to 1.
+
+    bfloat16 integers stop at 256, so an exp-sum accumulated in the input
+    dtype froze there and the group's weights summed to well over 2.
+    """
+    src = jnp.zeros(600, dtype=jnp.bfloat16)
+    index = jnp.zeros(600, dtype=jnp.int32)
+
+    weights = scatter_softmax(src, index, dim_size=1)
+
+    assert weights.dtype == jnp.bfloat16
+    total = float(jnp.sum(weights.astype(jnp.float32)))
+    assert abs(total - 1.0) < 1e-2
+
+
+def test_scatter_log_softmax_does_not_saturate_in_low_precision():
+    """log-softmax of a uniform 600-member bfloat16 group is -log(600)."""
+    src = jnp.zeros(600, dtype=jnp.bfloat16)
+    index = jnp.zeros(600, dtype=jnp.int32)
+
+    out = scatter_log_softmax(src, index, dim_size=1)
+
+    assert out.dtype == jnp.bfloat16
+    expected = -jnp.log(600.0)
+    assert abs(float(out[0]) - float(expected)) < 0.02 * abs(float(expected))

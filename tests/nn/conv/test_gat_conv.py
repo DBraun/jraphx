@@ -378,3 +378,36 @@ def test_gat_conv_rejects_out_of_range_source_index():
 
     with pytest.raises(IndexError, match="Source indices"):
         conv((x_src, x_dst), jnp.array([[0, 7], [0, 3]]))
+
+
+def test_gat_conv_default_negative_slope_is_two_tenths():
+    """The LeakyReLU slope defaults to PyG's 0.2."""
+    conv = GATConv(8, 16, rngs=nnx.Rngs(0))
+    assert conv.negative_slope == 0.2
+
+
+def test_gat_conv_source_only_bipartite_omits_target_term():
+    """With ``x = (x_src, None)`` the attention logit is the source term alone.
+
+    PyG skips ``att_dst`` entirely when no target features exist; gathering
+    the source table at target ids instead fabricates features from unrelated
+    rows and changes every attention weight.
+    """
+    heads, out_features = 2, 3
+    conv = GATConv(
+        (5, 4), out_features, heads=heads, add_self_loops=False, bias=False, rngs=nnx.Rngs(0)
+    )
+    x_src = jnp.asarray(np.random.default_rng(0).normal(size=(4, 5)), dtype=jnp.float32)
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 2]])
+
+    out = conv((x_src, None), edge_index, size=(4, 3))
+
+    x_proj = conv.lin_src(x_src).reshape(-1, heads, out_features)
+    x_j = x_proj[edge_index[0]]
+    alpha = jnp.sum(x_j * conv.att_src[...], axis=-1)
+    alpha = jnn.leaky_relu(alpha, negative_slope=conv.negative_slope)
+    alpha = scatter_softmax(alpha, edge_index[1], dim_size=3)
+    messages = (x_j * alpha[..., None]).reshape(-1, heads * out_features)
+    expected = scatter_add(messages, edge_index[1], dim_size=3)
+
+    assert jnp.allclose(out, expected, atol=1e-6)

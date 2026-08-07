@@ -108,9 +108,13 @@ def add_remaining_self_loops(
     fill_value: float = 1.0,
     num_nodes: int | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray | None]:
-    """Add self-loops only for nodes that don't already have them.
+    """Add self-loops so that every node carries exactly one.
 
-    Optimized version using boolean masking instead of setdiff1d.
+    The self-loops the input already had are removed first, so a duplicated
+    loop collapses to a single one. Every node's loop is appended at the end of
+    the edge list in node order. A node that already had a loop keeps that
+    loop's attribute (the last occurrence, if it had several); loops created
+    for the remaining nodes take :obj:`fill_value`.
 
     Args:
         edge_index: Edge indices [2, num_edges]
@@ -122,46 +126,33 @@ def add_remaining_self_loops(
         Tuple of (edge_index with self-loops, edge_attr with self-loops)
 
     .. note::
-        The number of added self-loops is data-dependent, so this function
-        cannot be traced by :obj:`jax.jit`.
+        The number of self-loops removed from the input is data-dependent, so
+        this function cannot be traced by :obj:`jax.jit`.
     """
     if num_nodes is None:
         if edge_index.size == 0:
             return edge_index, edge_attr
         num_nodes = int(edge_index.max()) + 1
 
-    # Find existing self-loops
+    # Drop every existing self-loop; the per-node loops appended below replace
+    # them, so a duplicated loop collapses to one
     row, col = edge_index[0], edge_index[1]
-    is_self_loop = row == col
+    keep = row != col
 
-    # Create a boolean mask for nodes that have self-loops
-    # More efficient than using unique and setdiff1d
-    has_self_loop = jnp.zeros(num_nodes, dtype=jnp.bool_)
-    has_self_loop = has_self_loop.at[row[is_self_loop]].set(True)
+    loop_index = jnp.arange(num_nodes, dtype=edge_index.dtype)
+    edge_index = jnp.concatenate(
+        [edge_index[:, keep], jnp.stack([loop_index, loop_index], axis=0)], axis=1
+    )
 
-    # Find nodes without self-loops using boolean indexing
-    nodes_without_loops = jnp.where(~has_self_loop)[0]
-
-    # Create self-loops for nodes without them
-    num_new_loops = nodes_without_loops.size
-    if num_new_loops > 0:
-        loop_index = jnp.stack([nodes_without_loops, nodes_without_loops], axis=0)
-        edge_index = jnp.concatenate([edge_index, loop_index], axis=1)
-
-        # Handle edge attributes
-        if edge_attr is not None:
-            if edge_attr.ndim == 1:
-                loop_attr = jnp.full(
-                    num_new_loops,
-                    fill_value,
-                    dtype=edge_attr.dtype,
-                )
-            else:
-                loop_attr = jnp.full(
-                    (num_new_loops,) + edge_attr.shape[1:],
-                    fill_value,
-                    dtype=edge_attr.dtype,
-                )
-            edge_attr = jnp.concatenate([edge_attr, loop_attr], axis=0)
+    if edge_attr is not None:
+        loop_attr = jnp.full(
+            (num_nodes,) + edge_attr.shape[1:],
+            fill_value,
+            dtype=edge_attr.dtype,
+        )
+        # A node that already had a loop keeps its attribute; with several,
+        # the last occurrence wins
+        loop_attr = loop_attr.at[row[~keep]].set(edge_attr[~keep])
+        edge_attr = jnp.concatenate([edge_attr[keep], loop_attr], axis=0)
 
     return edge_index, edge_attr

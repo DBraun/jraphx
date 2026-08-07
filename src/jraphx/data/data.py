@@ -131,30 +131,22 @@ class Data:
     def is_directed(self) -> bool:
         """Check if the graph is directed using efficient JAX operations.
 
-        A graph is undirected if for every edge (i, j), there exists an edge (j, i).
-        This implementation uses vectorized operations instead of Python loops.
+        A graph is undirected if the multiset of edges :math:`(i, j)` equals the
+        multiset of reversed edges :math:`(j, i)` -- an edge appearing twice
+        needs its reverse twice. The comparison sorts both endpoint tables
+        lexicographically and compares them elementwise, so no node-id packing
+        is involved and the check is exact at any graph size.
         """
         if self.edge_index is None or self.edge_index.shape[1] == 0:
             return False
 
-        # Create a unique identifier for each edge using Cantor pairing
-        # This avoids the need for sets and loops
         src, dst = self.edge_index[0], self.edge_index[1]
 
-        # For undirected graphs, every edge should have its reverse
-        # Create edge identifiers for both directions
-        forward_edges = src * self.num_nodes + dst
-        reverse_edges = dst * self.num_nodes + src
+        def lexsorted(row: jnp.ndarray, col: jnp.ndarray) -> jnp.ndarray:
+            order = jnp.lexsort((col, row))
+            return jnp.stack([row[order], col[order]])
 
-        # Check if all forward edges have corresponding reverse edges
-        # Using JAX operations for efficiency
-        forward_set = jnp.unique(forward_edges)
-
-        # For each forward edge, check if reverse exists
-        has_reverse = jnp.isin(reverse_edges, forward_set)
-
-        # If all edges have their reverse, it's undirected
-        return not bool(jnp.all(has_reverse))
+        return not bool(jnp.array_equal(lexsorted(src, dst), lexsorted(dst, src)))
 
     def keys(self) -> list[str]:
         """Return the names of every attribute that carries data.

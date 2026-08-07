@@ -99,7 +99,6 @@ def test_transformer_conv_edge_attr_conditions_attention():
     alpha = scatter_softmax(alpha, col, dim=0, dim_size=num_nodes)
     messages = ((value_j + edge_feat) * alpha[..., None]).reshape(-1, heads * out_features)
     expected = scatter_add(messages, col, dim_size=num_nodes) + conv.lin_skip(x)
-    expected = conv.lin_out(expected)
 
     assert jnp.allclose(out, expected, atol=1e-5)
 
@@ -159,6 +158,75 @@ def test_transformer_conv_no_root_weight():
 
     # Results should be different
     assert not jnp.allclose(out_root, out_no_root)
+
+
+def test_transformer_conv_no_output_projection():
+    """The forward is exactly attention aggregation plus skip -- no outer map.
+
+    The documented operator ends at :math:`W_1 x_i + \\sum_j \\alpha_{ij} W_2 x_j`;
+    an extra output projection would make every entry of this hand-computed
+    reference wrong by a non-identity linear map.
+    """
+    heads, out_features = 2, 3
+    num_nodes = 4
+    x = random.normal(random.key(7), (num_nodes, 5))
+    edge_index = jnp.array([[0, 1, 2, 3, 1], [1, 2, 3, 0, 0]])
+
+    conv = TransformerConv(5, out_features, heads, rngs=nnx.Rngs(0))
+    out = conv(x, edge_index)
+
+    row, col = edge_index[0], edge_index[1]
+    query, key, value = jnp.split(conv.lin_qkv(x), 3, axis=-1)
+    query_i = query[col].reshape(-1, heads, out_features)
+    key_j = key[row].reshape(-1, heads, out_features)
+    value_j = value[row].reshape(-1, heads, out_features)
+    alpha = (query_i * key_j).sum(axis=-1) / jnp.sqrt(out_features)
+    alpha = scatter_softmax(alpha, col, dim=0, dim_size=num_nodes)
+    messages = (value_j * alpha[..., None]).reshape(-1, heads * out_features)
+    expected = scatter_add(messages, col, dim_size=num_nodes) + conv.lin_skip(x)
+
+    assert jnp.allclose(out, expected, atol=1e-5)
+
+
+def test_transformer_conv_qkv_projections_have_bias():
+    """The fused q/k/v projection carries a bias, like PyG's three Linears."""
+    conv = TransformerConv(5, 3, heads=2, rngs=nnx.Rngs(0))
+    assert conv.lin_qkv.use_bias
+
+
+def test_transformer_conv_beta_requires_root_weight():
+    """Without a skip term there is nothing to gate: beta=True is ignored.
+
+    An isolated target node then receives no messages and no root term, so its
+    output row is exactly zero; the pre-fix behavior gated against the node's
+    raw value projection and produced a nonzero row.
+    """
+    x = random.normal(random.key(3), (3, 4))
+    # Node 2 has no incoming edges.
+    edge_index = jnp.array([[0, 1], [1, 0]])
+
+    conv = TransformerConv(4, 6, heads=2, beta=True, root_weight=False, rngs=nnx.Rngs(0))
+    assert conv.beta is False
+    assert conv.lin_beta is None
+
+    out = conv(x, edge_index)
+    assert jnp.allclose(out[2], 0.0)
+
+
+def test_transformer_conv_skip_width_follows_concat():
+    """With concat=False the skip map produces out_features directly.
+
+    Heads are averaged before the skip term, so lin_skip and lin_beta act at
+    the final output width.
+    """
+    conv = TransformerConv(5, 3, heads=2, concat=False, beta=True, rngs=nnx.Rngs(0))
+    assert conv.lin_skip.kernel.shape == (5, 3)
+    assert conv.lin_beta.kernel.shape == (9, 1)
+
+    x = random.normal(random.key(5), (4, 5))
+    edge_index = jnp.array([[0, 1, 2, 3], [1, 2, 3, 0]])
+    out = conv(x, edge_index)
+    assert out.shape == (4, 3)
 
 
 def test_transformer_conv_dropout():

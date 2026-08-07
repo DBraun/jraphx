@@ -193,3 +193,31 @@ class TestImmutability:
         updated = data.replace(x=jnp.ones((3, 2)))
         assert jnp.array_equal(updated.x, jnp.ones((3, 2)))
         assert jnp.array_equal(data.x, _line_graph().x)
+
+
+def test_is_directed_has_no_packing_overflow():
+    """A directed graph with ~40k nodes is reported as directed.
+
+    The pre-fix implementation packed edge ids as ``src * num_nodes + dst`` in
+    int32, which wraps above ~46k nodes; a wrapped reverse-edge id could
+    collide with a real edge and flip the answer to undirected.
+    """
+    edge_index = jnp.array([[5, 5, 7232], [7232, 40000, 5]])
+    data = Data(x=jnp.zeros((40001, 1)), edge_index=edge_index)
+
+    assert data.is_directed is True
+
+
+def test_is_directed_compares_edge_multisets():
+    """A duplicated edge needs its reverse duplicated too.
+
+    ``(0, 1)`` appears twice but ``(1, 0)`` only once, so the graph is
+    directed; set-membership semantics called it undirected.
+    """
+    edge_index = jnp.array([[0, 0, 1], [1, 1, 0]])
+    data = Data(x=jnp.zeros((2, 1)), edge_index=edge_index)
+
+    assert data.is_directed is True
+
+    balanced = Data(x=jnp.zeros((2, 1)), edge_index=jnp.array([[0, 0, 1, 1], [1, 1, 0, 0]]))
+    assert balanced.is_directed is False

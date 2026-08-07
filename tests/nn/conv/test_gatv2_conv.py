@@ -159,3 +159,35 @@ def test_gatv2_conv_rejects_out_of_range_source_index():
 
     with pytest.raises(IndexError, match="Source indices"):
         conv((x_src, x_dst), jnp.array([[0, 7], [0, 3]]))
+
+
+def test_gatv2_conv_default_fill_value_is_mean():
+    """Self-loop edge features default to the mean of incoming features.
+
+    PyG's GATv2Conv defaults ``fill_value`` to ``"mean"``, like GATConv; a
+    0.0 default silently changed the attention of every self-loop.
+    """
+    conv = GATv2Conv(4, 3, heads=2, edge_dim=2, rngs=nnx.Rngs(0))
+    assert conv.fill_value == "mean"
+
+
+def test_gatv2_conv_source_only_bipartite_omits_target_term():
+    """With ``x = (x_src, None)`` the attention input is the source term alone."""
+    heads, out_features = 2, 3
+    conv = GATv2Conv(
+        4, out_features, heads=heads, add_self_loops=False, bias=False, rngs=nnx.Rngs(1)
+    )
+    x_src = jnp.asarray(np.random.default_rng(1).normal(size=(3, 4)), dtype=jnp.float32)
+    edge_index = jnp.array([[0, 1, 2], [0, 0, 1]])
+
+    out = conv((x_src, None), edge_index)
+
+    x_l = conv.lin_l(x_src).reshape(-1, heads, out_features)
+    x_j = x_l[edge_index[0]]
+    combined = jnn.leaky_relu(x_j, negative_slope=conv.negative_slope)
+    alpha = jnp.sum(combined * conv.att[...], axis=-1)
+    alpha = scatter_softmax(alpha, edge_index[1], dim_size=3)
+    messages = (x_j * alpha[..., None]).reshape(-1, heads * out_features)
+    expected = scatter_add(messages, edge_index[1], dim_size=3)
+
+    assert jnp.allclose(out, expected, atol=1e-6)

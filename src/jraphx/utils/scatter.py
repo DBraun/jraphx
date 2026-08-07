@@ -381,8 +381,9 @@ def scatter(
     which are XLA-optimized for better performance on GPU/TPU.
 
     Args:
-        src: Source tensor to scatter [\\*, N, \\*]
-        index: Indices where to scatter [N] or same shape as src
+        src: Source tensor to scatter [N, \\*]
+        index: One-dimensional indices where to scatter [N], one per row of
+            ``src``
         dim_size: Size of the output dimension, inferred from ``index`` if
             :obj:`None` (which requires a concrete ``index``)
         dim: Dimension along which to scatter (default: -2, which maps to 0)
@@ -612,10 +613,14 @@ def _scatter_logsumexp(
     # shifting those by zero keeps the exponentials finite and yields -inf.
     shift = jnp.where(jnp.isneginf(max_vals), jnp.zeros((), max_vals.dtype), max_vals)
 
+    # Accumulate the exponentials in at least float32: a bfloat16 running sum
+    # freezes at 256 and under-reports any larger segment.
     exp_vals = jnp.exp(src - shift[index])
+    out_dtype = exp_vals.dtype
+    exp_vals = exp_vals.astype(_accumulator_dtype(out_dtype))
     sum_exp = _scatter_add(exp_vals, index, dim_size, dim)
 
-    return jnp.log(sum_exp) + shift
+    return (jnp.log(sum_exp) + shift).astype(out_dtype)
 
 
 # Keep fallback for compatibility
@@ -626,10 +631,14 @@ def scatter_fallback(
     dim: int = -2,
     reduce: str = "add",
 ) -> jnp.ndarray:
-    """Fallback scatter implementation using loops (slower but supports all dimensions).
+    """Fallback scatter implementation using a Python loop over rows (slow).
 
     This implementation is kept for compatibility and testing.
     Use the main scatter() function for better performance.
+
+    Only scattering along the leading axis is implemented: ``dim=0``, or the
+    default ``dim=-2`` with a two-dimensional ``src``. Any other combination
+    raises :obj:`NotImplementedError`.
 
     Args:
         src: Source tensor to scatter

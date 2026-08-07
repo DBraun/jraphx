@@ -29,16 +29,18 @@ class JumpingKnowledge(nnx.Module):
         \sum_{t=1}^T \alpha_v^{(t)} \mathbf{x}_v^{(t)}
 
     with attention scores :math:`\alpha_v^{(t)}` obtained from a bi-directional
-    LSTM (:obj:`"lstm"`).
+    recurrent network (:obj:`"lstm"`). The mode keeps PyG's name, but the
+    recurrence is a pair of :class:`flax.nnx.GRUCell` modules run in opposite
+    directions, not an LSTM, so its parameters and outputs differ from PyG's.
 
     Args:
         mode (str): The aggregation scheme to use
             (:obj:`"cat"`, :obj:`"max"` or :obj:`"lstm"`).
         num_features (int, optional): The number of features per representation.
-            Needs to be only set for LSTM-style aggregation.
+            Needs to be only set for :obj:`"lstm"`-mode aggregation.
             (default: :obj:`None`)
         num_layers (int, optional): The number of layers to aggregate. Needs to
-            be only set for LSTM-style aggregation. (default: :obj:`None`)
+            be only set for :obj:`"lstm"`-mode aggregation. (default: :obj:`None`)
         rngs: Random number generators for initialization.
     """
 

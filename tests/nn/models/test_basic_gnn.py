@@ -474,3 +474,57 @@ if __name__ == "__main__":
     # Run a basic test
     test_gcn(None, 0.0, None, None, None)
     print("Basic GNN tests passed!")
+
+
+def test_gat_embedding_model_concatenates_last_layer_heads():
+    """With ``out_features=None`` the last layer concatenates narrow heads.
+
+    PyG disables concatenation only on a layer that maps straight to a
+    requested ``out_features``; an embedding model keeps
+    ``hidden_features // heads`` channels per head throughout. Averaging
+    full-width heads instead produced the same output shape from a different
+    architecture, which is why the shape grid never caught it.
+    """
+    model = GAT(8, 16, num_layers=2, heads=4, rngs=nnx.Rngs(0))
+
+    last = model.convs[-1]
+    assert last.concat is True
+    assert last.out_features == 4
+    assert last.heads == 4
+
+    # A layer that does map to out_features averages full-width heads.
+    model_out = GAT(8, 16, num_layers=2, out_features=3, heads=4, rngs=nnx.Rngs(0))
+    assert model_out.convs[-1].concat is False
+    assert model_out.convs[-1].out_features == 3
+
+
+def test_gat_model_forwards_dropout_to_attention():
+    """The model-level dropout rate reaches every GATConv's attention dropout."""
+    model = GAT(8, 16, num_layers=3, heads=4, dropout_rate=0.5, rngs=nnx.Rngs(0))
+    assert all(conv.dropout_rate == 0.5 for conv in model.convs)
+
+
+def test_model_conv_kwargs_take_effect():
+    """Keyword arguments documented as conv arguments actually reach the conv."""
+    gcn = GCN(8, 16, num_layers=2, bias=False, rngs=nnx.Rngs(0))
+    assert all(conv.bias is None for conv in gcn.convs)
+
+    gin = GIN(8, 16, num_layers=2, eps=0.7, rngs=nnx.Rngs(0))
+    assert all(conv.eps == 0.7 for conv in gin.convs)
+
+    gat = GAT(
+        8, 16, num_layers=2, heads=4, add_self_loops=False, negative_slope=0.9, rngs=nnx.Rngs(0)
+    )
+    assert all(conv._add_self_loops is False for conv in gat.convs)
+    assert all(conv.negative_slope == 0.9 for conv in gat.convs)
+
+    sage = GraphSAGE(8, 16, num_layers=2, aggr="max", rngs=nnx.Rngs(0))
+    assert all(conv.aggr == "max" for conv in sage.convs)
+
+
+def test_model_rejects_unknown_conv_kwargs():
+    """An unsupported conv argument raises instead of being dropped silently."""
+    with pytest.raises(TypeError):
+        GCN(8, 16, num_layers=2, nonsense=1, rngs=nnx.Rngs(0))
+    with pytest.raises(TypeError):
+        GAT(8, 16, num_layers=2, nonsense=1, rngs=nnx.Rngs(0))

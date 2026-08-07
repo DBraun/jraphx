@@ -355,16 +355,27 @@ Batch Processing
 JIT Compilation
 ~~~~~~~~~~~~~~~
 
+:class:`~jraphx.nn.pool.TopKPooling` and :class:`~jraphx.nn.pool.SAGPooling`
+select a data-dependent number of nodes, so they cannot be traced by
+:obj:`jax.jit` (see the note above). Run the pooling step eagerly and jit the
+dense computation that follows it:
+
 .. code-block:: python
+
+   from functools import partial
 
    import jax
 
-   @jax.jit
-   def pool_and_classify(x, edge_index, batch):
-       # Pooling operations are JIT-compatible
-       x_pool, edge_pool, _, batch_pool, _ = pool(x, edge_index, batch=batch)
-       graph_features = global_mean_pool(x_pool, batch_pool)
+   @partial(jax.jit, static_argnames="num_graphs")
+   def classify(x_pool, batch_pool, num_graphs):
+       # The number of output segments must be static under tracing
+       graph_features = global_mean_pool(x_pool, batch_pool, size=num_graphs)
        return classifier(graph_features)
+
+   # Eager: output size depends on the scores
+   x_pool, edge_pool, _, batch_pool, _ = pool(x, edge_index, batch=batch)
+   # Traced: shapes are fixed from here on
+   predictions = classify(x_pool, batch_pool, num_graphs=int(batch.max()) + 1)
 
 Common Patterns
 ---------------

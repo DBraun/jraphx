@@ -30,7 +30,9 @@ class SAGEConv(MessagePassing):
             target dimensionalities.
         out_features (int): Size of each output sample.
         aggr (str, optional): The aggregation scheme to use.
-            Can be :obj:`"mean"`, :obj:`"max"`, :obj:`"lstm"`, or :obj:`"gcn"`.
+            Can be :obj:`"mean"`, :obj:`"max"`, or :obj:`"gcn"`. Passing
+            :obj:`"lstm"` raises :obj:`NotImplementedError`; PyG's LSTM
+            aggregation is not implemented.
             (default: :obj:`"mean"`)
         normalize (bool, optional): If set to :obj:`True`, output features
             will be :math:`\ell_2`-normalized, *i.e.*,

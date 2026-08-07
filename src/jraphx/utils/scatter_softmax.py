@@ -9,7 +9,13 @@ from functools import partial
 import jax
 from jax import numpy as jnp
 
-from .scatter import _resolve_dim_size, scatter_add, scatter_logsumexp, scatter_max
+from .scatter import (
+    _accumulator_dtype,
+    _resolve_dim_size,
+    scatter_add,
+    scatter_logsumexp,
+    scatter_max,
+)
 
 
 def scatter_softmax(
@@ -92,8 +98,12 @@ def _scatter_softmax(
     # Subtract max from each element in its group
     src_shifted = src - max_vals[index]
 
-    # Compute exp
+    # Compute exp, accumulating the per-group normalizer in at least float32: a
+    # bfloat16 running sum freezes at 256, so the weights of any larger group
+    # would sum to more than 1.
     exp_vals = jnp.exp(src_shifted)
+    out_dtype = exp_vals.dtype
+    exp_vals = exp_vals.astype(_accumulator_dtype(out_dtype))
 
     # Sum exp values per group
     sum_exp = scatter_add(exp_vals, index, dim_size, dim)
@@ -102,7 +112,7 @@ def _scatter_softmax(
     sum_exp = jnp.where(sum_exp > 0, sum_exp, jnp.ones((), sum_exp.dtype))
 
     # Normalize: divide each exp value by its group's sum
-    softmax_vals = exp_vals / sum_exp[index]
+    softmax_vals = (exp_vals / sum_exp[index]).astype(out_dtype)
 
     return softmax_vals
 

@@ -358,7 +358,6 @@ Here's a simple training loop example:
 .. code-block:: python
 
     import optax
-    from jraphx.data import DataLoader
 
     # Create optimizer
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=0.01), wrt=nnx.Param)
@@ -493,10 +492,11 @@ Let's create a simple training function using JAX:
     def loss_fn(model, data, train_mask):
         """Compute cross-entropy loss on training nodes."""
         logits = model(data)
-        # Select only training nodes
-        train_logits = logits[train_mask]
-        train_labels = data.y[train_mask]
-        return optax.softmax_cross_entropy_with_integer_labels(train_logits, train_labels).mean()
+        # Boolean indexing selects a data-dependent number of rows, which a
+        # traced function cannot express; weight the per-node losses by the
+        # mask instead
+        losses = optax.softmax_cross_entropy_with_integer_labels(logits, data.y)
+        return (losses * train_mask).sum() / train_mask.sum()
 
     # Setup optimizer
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
@@ -530,14 +530,15 @@ Finally, we can evaluate our model:
         """Evaluate model accuracy on test nodes."""
         logits = model(data)
         pred = jnp.argmax(logits, axis=1)
-        correct = jnp.sum(pred[test_mask] == data.y[test_mask])
+        # As in the loss, mask the comparison rather than boolean-indexing it
+        correct = jnp.sum((pred == data.y) & test_mask)
         accuracy = correct / jnp.sum(test_mask)
         return accuracy
 
     model.eval()
     test_accuracy = evaluate(model, data, test_mask)
     print(f'Test Accuracy: {test_accuracy:.4f}')
-    >>> Test Accuracy: 0.5000  # Small dataset, results may vary
+    >>> Test Accuracy: 0.0000  # Two training nodes overfit; a toy graph, not a benchmark
 
 
 This is all it takes to implement your first graph neural network with **JraphX**!

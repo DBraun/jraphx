@@ -89,6 +89,11 @@ class BasicGNN(nnx.Module):
         else:
             self.out_features = hidden_features
 
+        # The last convolution maps straight to the requested output width only
+        # when out_features is set and no JumpingKnowledge aggregation follows.
+        # Subclasses (GAT) branch on this to decide head concatenation.
+        self._is_conv_to_out = out_features is not None and jk is None
+
         # Create convolution layers
         self.convs: nnx.List[MessagePassing] = nnx.List([])
         if num_layers >= 1:

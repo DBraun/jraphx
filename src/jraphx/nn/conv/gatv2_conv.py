@@ -74,9 +74,11 @@ class GATv2Conv(MessagePassing):
             self-loops to the input graph. (default: :obj:`True`)
         edge_dim (int, optional): Edge feature dimensionality (in case
             there are any). (default: :obj:`None`)
-        fill_value (float, optional): The way to generate edge features of
-            self-loops (in case :obj:`edge_dim != None`).
-            (default: :obj:`0.0`)
+        fill_value (float or str, optional): The way to generate edge features
+            of self-loops (in case :obj:`edge_dim != None`). Given a float, the
+            loop features are filled with that constant; :obj:`"mean"`,
+            :obj:`"add"`, :obj:`"max"` or :obj:`"min"` reduce each node's
+            incoming edge features instead. (default: :obj:`"mean"`)
         bias (bool, optional): If set to :obj:`False`, the layer will not learn
             an additive bias. (default: :obj:`True`)
         share_weights (bool, optional): If set to :obj:`True`, the same matrix
@@ -107,7 +109,7 @@ class GATv2Conv(MessagePassing):
         dropout: float = 0.0,
         add_self_loops: bool = True,
         edge_dim: int | None = None,
-        fill_value: float = 0.0,
+        fill_value: Union[float, str] = "mean",
         bias: bool = True,
         share_weights: bool = False,
         residual: bool = False,
@@ -258,9 +260,10 @@ class GATv2Conv(MessagePassing):
             if self.res is not None and x_r is not None:
                 res = self.res(x_r)
 
-            # Linear transformation
+            # Linear transformation. Without target features there is no target
+            # table at all; the attention input is then the source term alone.
             x_l = self.lin_l(x_l).reshape(-1, H, C)
-            x_r = self.lin_r(x_r).reshape(-1, H, C) if x_r is not None else x_l
+            x_r = self.lin_r(x_r).reshape(-1, H, C) if x_r is not None else None
         else:
             num_nodes = x.shape[0]
 
@@ -291,12 +294,17 @@ class GATv2Conv(MessagePassing):
         _validate_index_range(row, x_l.shape[0], "Source")
         _validate_index_range(col, num_nodes, "Target")
 
-        # Get source and target features for edges
-        x_i = x_r[col]  # [num_edges, heads, out_features]
+        # Get source features for edges
         x_j = x_l[row]  # [num_edges, heads, out_features]
 
-        # Key difference from GAT: combine features BEFORE applying attention
-        x_combined = x_i + x_j  # [num_edges, heads, out_features]
+        # Key difference from GAT: combine features BEFORE applying attention.
+        # With bipartite (x_src, None) input the target term is omitted, as in
+        # PyG; gathering the source table at target ids would fabricate it.
+        if x_r is not None:
+            x_i = x_r[col]  # [num_edges, heads, out_features]
+            x_combined = x_i + x_j  # [num_edges, heads, out_features]
+        else:
+            x_combined = x_j
 
         # Add edge features if available
         if edge_attr is not None and self.lin_edge is not None:

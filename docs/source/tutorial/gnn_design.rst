@@ -162,9 +162,10 @@ Use :obj:`nnx.scan` for memory-efficient processing of deep networks:
             # Output layer
             return self.output_layer(x, edge_index)
 
-    # Create and use deep network
+    # Create and use deep network. Unlike the models above, this class takes
+    # the Data object itself.
     deep_model = DeepGNN(16, 64, 7, 10, rngs=nnx.Rngs(42))
-    deep_predictions = deep_model(data.x, data.edge_index)
+    deep_predictions = deep_model(data)
 
 Random Number Generation with Flax NNX
 ------------------------------------------
@@ -174,6 +175,7 @@ Random Number Generation with Flax NNX
 .. code-block:: python
 
     from flax import nnx
+    from jax import random
 
     # Create Rngs with multiple named keys
     rngs = nnx.Rngs(0, params=1, dropout=2)

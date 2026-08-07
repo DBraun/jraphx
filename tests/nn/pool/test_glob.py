@@ -18,6 +18,7 @@ from jraphx.nn.pool.glob import (
     global_mean_pool,
     global_min_pool,
     global_softmax_pool,
+    global_sort_pool,
 )
 
 
@@ -252,8 +253,46 @@ def test_different_graph_sizes():
 # TODO: Additional pooling functions available in JraphX but not in PyG:
 # - global_min_pool
 # - global_softmax_pool
-# - global_sort_pool
 # - batch_histogram
+# (global_sort_pool exists in PyG too, as SortAggregation; see
+# test_global_sort_pool_* for the parity tests.)
+
+
+def test_global_sort_pool_sorts_by_last_channel():
+    """Nodes are ranked by the last feature channel, not by their feature sum.
+
+    Node 0 has the largest sum (11) but the smallest last channel (1), so PyG's
+    SortAggregation ranks it last; a sum-based sort would rank it first.
+    """
+    x = jnp.array([[10.0, 1.0], [0.0, 3.0], [5.0, 2.0]])
+
+    out = global_sort_pool(x, None, k=2)
+    assert out.shape == (1, 4)
+    assert jnp.allclose(out[0], jnp.array([0.0, 3.0, 5.0, 2.0]))
+
+
+def test_global_sort_pool_padding_never_displaces_real_nodes():
+    """Zero-padding is appended after selection, so it cannot outrank a node.
+
+    Both nodes sort ahead of the padding even though their sort scores are
+    negative; pre-fix, the padding's score of 0 won the sort and pushed the
+    real features to the back of the row.
+    """
+    x = jnp.array([[-1.0, -5.0], [-2.0, -3.0]])
+
+    out = global_sort_pool(x, None, k=3)
+    assert jnp.allclose(out[0], jnp.array([-2.0, -3.0, -1.0, -5.0, 0.0, 0.0]))
+
+
+def test_global_sort_pool_batched_matches_single_graph():
+    """The batched path applies the same per-graph sort-then-pad rule."""
+    x = jnp.array([[10.0, 1.0], [0.0, 3.0], [5.0, 2.0], [-1.0, -5.0], [-2.0, -3.0]])
+    batch = jnp.array([0, 0, 0, 1, 1])
+
+    out = global_sort_pool(x, batch, k=3, size=2)
+    assert out.shape == (2, 6)
+    assert jnp.allclose(out[0], jnp.array([0.0, 3.0, 5.0, 2.0, 10.0, 1.0]))
+    assert jnp.allclose(out[1], jnp.array([-2.0, -3.0, -1.0, -5.0, 0.0, 0.0]))
 
 
 def test_jraphx_extensions():
@@ -431,3 +470,18 @@ if __name__ == "__main__":
     test_permuted_global_pool()
     test_dense_global_pool()
     print("Global pooling tests passed!")
+
+
+def test_batch_histogram_drops_out_of_range_values():
+    """With an explicit range, values outside it are not counted.
+
+    ``numpy.histogram`` drops them; folding them into the edge bins inflated
+    the first and last counts.
+    """
+    x = jnp.array([[-5.0], [-0.5], [0.5], [5.0]])
+
+    hist = batch_histogram(x, bins=2, min_val=-1.0, max_val=1.0)
+
+    ref, _ = np.histogram(np.asarray(x)[:, 0], bins=2, range=(-1.0, 1.0))
+    assert jnp.allclose(hist[0], jnp.asarray(ref, dtype=jnp.float32))
+    assert float(hist.sum()) == 2.0

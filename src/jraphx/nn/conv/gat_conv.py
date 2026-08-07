@@ -311,16 +311,19 @@ class GATConv(MessagePassing):
         _validate_index_range(row, x_src.shape[0], "Source")
         _validate_index_range(col, num_nodes, "Target")
 
-        # Get source and target features for edges
-        x_i = x_dst[col] if x_dst is not None else x_src[col]  # [num_edges, heads, out_features]
+        # Get source features for edges
         x_j = x_src[row]  # [num_edges, heads, out_features]
 
         # Compute attention scores for each head
         # e_{ij} = a_src^T x_j + a_dst^T x_i + (optional) a_edge^T edge_features,
         # where a_src pairs with the source (j) features and a_dst with the target (i) features.
-        alpha_src = jnp.sum(x_j * self.att_src[...], axis=-1)  # [num_edges, heads]
-        alpha_dst = jnp.sum(x_i * self.att_dst[...], axis=-1)  # [num_edges, heads]
-        alpha = alpha_src + alpha_dst  # [num_edges, heads]
+        # With bipartite (x_src, None) input there are no target features, so the
+        # target term is omitted entirely; indexing the source table with target
+        # ids instead would fabricate features from unrelated rows.
+        alpha = jnp.sum(x_j * self.att_src[...], axis=-1)  # [num_edges, heads]
+        if x_dst is not None:
+            x_i = x_dst[col]  # [num_edges, heads, out_features]
+            alpha = alpha + jnp.sum(x_i * self.att_dst[...], axis=-1)
 
         # Add edge feature attention if available
         if edge_attr is not None and self.lin_edge is not None and self.att_edge is not None:

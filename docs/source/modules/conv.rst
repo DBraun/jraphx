@@ -447,7 +447,8 @@ Performance Tips
 **Memory Efficiency:**
 
 - Use ``concat=False`` in attention layers to reduce memory
-- Consider ``aggr='mean'`` over ``aggr='lstm'`` for large graphs
+- Prefer ``aggr='mean'`` or ``aggr='max'``; ``aggr='lstm'`` is not implemented
+  and raises :obj:`NotImplementedError`
 - Use sparse operations when available
 
 Edge Features
@@ -458,11 +459,11 @@ Many layers support edge features:
 .. code-block:: python
 
    # GATv2 with edge features
-   conv = GATv2Conv(16, 32, heads=8, edge_dim=4)
+   conv = GATv2Conv(16, 32, heads=8, edge_dim=4, rngs=nnx.Rngs(0))
    out = conv(x, edge_index, edge_attr=edge_features)
 
    # TransformerConv with edge features
-   conv = TransformerConv(16, 32, heads=8, edge_dim=4)
+   conv = TransformerConv(16, 32, heads=8, edge_dim=4, rngs=nnx.Rngs(0))
    out = conv(x, edge_index, edge_attr=edge_features)
 
 Advanced Usage
@@ -492,8 +493,8 @@ Heterogeneous Graphs
    edge_index_2 = ...  # Type 2 edges
 
    # Use different convolutions
-   conv1 = GCNConv(16, 32)
-   conv2 = SAGEConv(16, 32)
+   conv1 = GCNConv(16, 32, rngs=nnx.Rngs(0))
+   conv2 = SAGEConv(16, 32, rngs=nnx.Rngs(1))
 
    out1 = conv1(x, edge_index_1)
    out2 = conv2(x, edge_index_2)

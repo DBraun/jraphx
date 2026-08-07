@@ -25,9 +25,9 @@ class TransformerConv(MessagePassing):
         {\sqrt{d}} \right)
 
     Args:
-        in_features (int or tuple): Size of each input sample, or tuple for
-            bipartite graphs. A tuple corresponds to the sizes of source and
-            target dimensionalities.
+        in_features (int): Size of each input sample. Bipartite
+            :obj:`(x_src, x_dst)` inputs are not supported; every node uses the
+            same feature table for queries, keys and values.
         out_features (int): Size of each output sample.
         heads (int, optional): Number of multi-head-attentions.
             (default: :obj:`1`)
@@ -44,8 +44,10 @@ class TransformerConv(MessagePassing):
 
             with :math:`\beta_i = \textrm{sigmoid}(\mathbf{w}_5^{\top}
             [\mathbf{W}_1 \mathbf{x}_i, \mathbf{m}_i, \mathbf{W}_1 \mathbf{x}_i - \mathbf{m}_i])`.
+            Requires :obj:`root_weight=True`; without the skip term there is
+            nothing to gate against, so :obj:`beta` is ignored.
             (default: :obj:`False`)
-        dropout (float, optional): Dropout probability of the normalized
+        dropout_rate (float, optional): Dropout probability of the normalized
             attention coefficients which exposes each node to a stochastically
             sampled neighborhood during training. (default: :obj:`0`)
         edge_dim (int, optional): Edge feature dimensionality (in case
@@ -74,9 +76,7 @@ class TransformerConv(MessagePassing):
 
     Shapes:
         - **input:**
-          node features :math:`(|\mathcal{V}|, F_{in})` or
-          :math:`((|\mathcal{V_s}|, F_{s}), (|\mathcal{V_t}|, F_{t}))`
-          if bipartite,
+          node features :math:`(|\mathcal{V}|, F_{in})`,
           edge indices :math:`(2, |\mathcal{E}|)`,
           edge features :math:`(|\mathcal{E}|, D)` *(optional)*
         - **output:** node features :math:`(|\mathcal{V}|, H * F_{out})`
@@ -105,12 +105,15 @@ class TransformerConv(MessagePassing):
         self.concat = concat
         self.dropout_rate = dropout_rate
         self.edge_dim = edge_dim
-        self.beta = beta
+        # Beta gates the aggregation against the skip term, so it is meaningless
+        # without one; with root_weight=False the flag is ignored.
+        self.beta = beta and root_weight
         self.root_weight = root_weight
 
-        # Single linear transformation for queries, keys, and values
-        # This is more efficient than three separate layers
-        self.lin_qkv = nnx.Linear(in_features, 3 * heads * out_features, use_bias=False, rngs=rngs)
+        # Single linear transformation for queries, keys, and values.
+        # This is more efficient than three separate layers; the fused bias
+        # splits into the per-projection biases along the same axis.
+        self.lin_qkv = nnx.Linear(in_features, 3 * heads * out_features, use_bias=True, rngs=rngs)
 
         # Edge feature projection
         self.lin_edge: nnx.Linear | None
@@ -119,27 +122,23 @@ class TransformerConv(MessagePassing):
         else:
             self.lin_edge = nnx.data(None)
 
+        # The skip and beta maps act on the output after heads are concatenated
+        # or averaged, so their width follows the concat mode.
+        skip_features = heads * out_features if concat else out_features
+
         # Skip connection transformation
         self.lin_skip: nnx.Linear | None
         if root_weight:
-            self.lin_skip = nnx.Linear(in_features, heads * out_features, use_bias=True, rngs=rngs)
+            self.lin_skip = nnx.Linear(in_features, skip_features, use_bias=True, rngs=rngs)
         else:
             self.lin_skip = nnx.data(None)
 
         # Beta gating parameter
         self.lin_beta: nnx.Linear | None
-        if beta:
-            self.lin_beta = nnx.Linear(3 * heads * out_features, 1, use_bias=False, rngs=rngs)
+        if self.beta:
+            self.lin_beta = nnx.Linear(3 * skip_features, 1, use_bias=False, rngs=rngs)
         else:
             self.lin_beta = nnx.data(None)
-
-        # Output projection
-        if concat:
-            self.lin_out = nnx.Linear(
-                heads * out_features, heads * out_features, use_bias=True, rngs=rngs
-            )
-        else:
-            self.lin_out = nnx.Linear(out_features, out_features, use_bias=True, rngs=rngs)
 
         self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
@@ -175,26 +174,20 @@ class TransformerConv(MessagePassing):
             edge_index, query=query, key=key, value=value, edge_attr=edge_attr
         )
 
-        # Apply beta gating if enabled
-        if self.lin_beta is not None:
-            if self.lin_skip is not None:
-                root = self.lin_skip(x)
-            else:
-                root = value
-            # Compute gating coefficient
-            beta_input = jnp.concatenate([root, out, root - out], axis=-1)
-            beta = nnx.sigmoid(self.lin_beta(beta_input))
-            out = beta * root + (1 - beta) * out
-        elif self.lin_skip is not None:
-            out = out + self.lin_skip(x)
-
-        # Average or concatenate heads
+        # Average or concatenate heads before the skip term: the skip and beta
+        # maps are sized for the final output width
         if not self.concat:
             out = out.reshape(-1, H, C)
             out = jnp.mean(out, axis=1)
 
-        # Final linear transformation
-        out = self.lin_out(out)
+        if self.lin_skip is not None:
+            root = self.lin_skip(x)
+            if self.lin_beta is not None:
+                beta_input = jnp.concatenate([root, out, root - out], axis=-1)
+                beta = nnx.sigmoid(self.lin_beta(beta_input))
+                out = beta * root + (1 - beta) * out
+            else:
+                out = out + root
 
         return out
 

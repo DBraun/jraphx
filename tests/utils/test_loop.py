@@ -271,12 +271,34 @@ def test_add_self_loops_duplicates_existing_loops():
     is_loop_on_zero = (out_index[0] == 0) & (out_index[1] == 0)
     assert int(jnp.sum(is_loop_on_zero)) == 2
 
-    # ``add_remaining_self_loops`` is the de-duplicating variant.
+    # ``add_remaining_self_loops`` is the de-duplicating variant: existing
+    # loops are replaced by exactly one loop per node, appended in node order,
+    # and a replaced loop keeps its attribute.
     remaining_index, remaining_attr = add_remaining_self_loops(
         edge_index, edge_attr, fill_value=1.0, num_nodes=2
     )
-    assert jnp.array_equal(remaining_index, jnp.array([[0, 1, 1], [0, 0, 1]]))
-    assert jnp.allclose(remaining_attr, jnp.array([5.0, 6.0, 1.0]))
+    assert jnp.array_equal(remaining_index, jnp.array([[1, 0, 1], [0, 0, 1]]))
+    assert jnp.allclose(remaining_attr, jnp.array([6.0, 5.0, 1.0]))
+
+
+def test_add_remaining_self_loops_collapses_duplicate_loops():
+    """A node carrying several self-loops ends up with exactly one.
+
+    The surviving loop takes the attribute of the last duplicate, matching
+    PyG's index-assignment semantics.
+    """
+    edge_index = jnp.array([[0, 0, 1], [0, 0, 2]])
+    edge_attr = jnp.array([10.0, 20.0, 3.0])
+
+    out_index, out_attr = add_remaining_self_loops(
+        edge_index, edge_attr, fill_value=1.0, num_nodes=3
+    )
+
+    assert jnp.array_equal(out_index, jnp.array([[1, 0, 1, 2], [2, 0, 1, 2]]))
+    assert jnp.allclose(out_attr, jnp.array([3.0, 20.0, 1.0, 1.0]))
+
+    loops_on_zero = (out_index[0] == 0) & (out_index[1] == 0)
+    assert int(jnp.sum(loops_on_zero)) == 1
 
 
 # TODO: The following features from PyG are not yet implemented in JraphX:

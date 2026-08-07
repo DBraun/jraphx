@@ -310,8 +310,12 @@ def global_sort_pool(
 ) -> jnp.ndarray:
     """Global sort pooling - select top-k features per graph.
 
-    Sorts node features and selects top-k nodes per graph.
-    Useful for graph classification tasks.
+    The SortPooling operator from `"An End-to-End Deep Learning Architecture
+    for Graph Classification" <https://ojs.aaai.org/index.php/AAAI/article/view/11782>`_:
+    nodes are sorted descending by their **last feature channel** (the paper's
+    designated sort channel), the top ``k`` rows are kept, and graphs with fewer
+    than ``k`` nodes are zero-padded *after* selection, so padding never
+    displaces a real node regardless of the sign of its features.
 
     .. note::
         The batched path loops over graphs in Python and masks nodes by value, so it
@@ -326,18 +330,19 @@ def global_sort_pool(
     Returns:
         Sorted and flattened features [batch_size, k * num_features]
     """
+
+    def _sort_and_pad(graph_x: jnp.ndarray) -> jnp.ndarray:
+        """Return the flattened top-k rows by last channel, zero-padded to k."""
+        indices = jnp.argsort(-graph_x[:, -1])[:k]
+        top = graph_x[indices]
+        if top.shape[0] < k:
+            padding = jnp.zeros((k - top.shape[0], graph_x.shape[1]), dtype=graph_x.dtype)
+            top = jnp.concatenate([top, padding], axis=0)
+        return top.flatten()
+
     if batch is None:
         # Single graph case
-        num_nodes = x.shape[0]
-        if num_nodes < k:
-            # Pad with zeros if needed
-            padding = jnp.zeros((k - num_nodes, x.shape[1]))
-            x = jnp.concatenate([x, padding], axis=0)
-
-        # Sort by feature sum and take top k
-        scores = x.sum(axis=-1)
-        indices = jnp.argsort(-scores)[:k]
-        return x[indices].flatten().reshape(1, -1)
+        return _sort_and_pad(x).reshape(1, -1)
 
     batch_size = _get_batch_size(batch, size)
     num_features = x.shape[1]
@@ -350,21 +355,10 @@ def global_sort_pool(
         mask = batch == i
         graph_x = x[mask]
 
-        num_nodes = graph_x.shape[0]
-        if num_nodes == 0:
+        if graph_x.shape[0] == 0:
             continue
 
-        if num_nodes < k:
-            # Pad with zeros
-            padding = jnp.zeros((k - num_nodes, num_features))
-            graph_x = jnp.concatenate([graph_x, padding], axis=0)
-
-        # Sort by feature sum and take top k
-        scores = graph_x.sum(axis=-1)
-        indices = jnp.argsort(-scores)[:k]
-        sorted_features = graph_x[indices].flatten()
-
-        output = output.at[i].set(sorted_features)
+        output = output.at[i].set(_sort_and_pad(graph_x))
 
     return output
 
@@ -379,7 +373,13 @@ def batch_histogram(
 ) -> jnp.ndarray:
     """Compute histogram features for each graph in batch.
 
-    Creates fixed-size graph representations using histograms.
+    Creates fixed-size graph representations using histograms. Binning follows
+    :func:`numpy.histogram`: bins are half-open except the last, which is
+    closed on the right, and with an explicit ``min_val``/``max_val`` the
+    values outside the range are dropped rather than folded into the edge
+    bins. Bin edges are computed in the working precision (float32 by
+    default), so a value lying exactly on an interior edge can land one bin
+    away from :func:`numpy.histogram`, whose edges are float64.
 
     Args:
         x: Node features [num_nodes, num_features]
@@ -416,9 +416,13 @@ def batch_histogram(
         # Digitize values. Searching the full edge array from the right and stepping
         # back one puts `v` in the bin whose half-open interval contains it, matching
         # :func:`numpy.histogram`; the clip folds `v == hi` into the last bin, which
-        # is closed on the right, and guards values outside an explicit range.
+        # is closed on the right.
         bin_indices = jnp.searchsorted(bin_edges, feature_vals, side="right") - 1
         bin_indices = jnp.clip(bin_indices, 0, bins - 1)
+
+        # Values outside an explicit range are dropped, as numpy.histogram
+        # drops them; weighting by the mask keeps every shape static for jit
+        in_range = (feature_vals >= lo) & (feature_vals <= hi)
 
         # Create combined indices for 2D histogram
         combined_idx = batch * bins + bin_indices
@@ -426,7 +430,7 @@ def batch_histogram(
         # Count occurrences in float32, so the tally stays exact for a low-precision
         # `x` whose accumulator would otherwise saturate
         hist = segment_sum(
-            jnp.ones_like(feature_vals, dtype=jnp.float32),
+            in_range.astype(jnp.float32),
             combined_idx,
             num_segments=batch_size * bins,
         ).reshape(batch_size, bins)

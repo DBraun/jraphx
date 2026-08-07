@@ -217,3 +217,14 @@ def test_gin_conv_different_dtypes():
 # - Memory optimization tests - JAX has different memory model
 
 # These missing features are documented in docs/source/missing_features.rst
+
+
+def test_gin_conv_default_eps_is_zero():
+    """``eps`` defaults to PyG's 0.0, so the root term is exactly ``1 * x_i``.
+
+    Without ``train_eps`` the attribute is a plain float, so the comparison
+    needs no unwrapping.
+    """
+    nn = MLP([8, 16], rngs=nnx.Rngs(0))
+    conv = GINConv(nn, rngs=nnx.Rngs(1))
+    assert conv.eps == 0.0

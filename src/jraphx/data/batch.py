@@ -128,10 +128,15 @@ class Batch(Data):
         """Return the node index field that element-level attributes align with.
 
         Returns:
-            The first entry of :attr:`NODE_INDEX_FIELDS`, or ``None`` when the
-            class declares no index fields.
+            The alphabetically first entry of :attr:`NODE_INDEX_FIELDS`, or
+            ``None`` when the class declares no index fields. The choice must
+            be deterministic -- set iteration order varies with the per-process
+            hash seed, and this field decides which element axis validation and
+            unbatching align with. A subclass with several index fields whose
+            element-level attributes follow a later one should override this
+            method.
         """
-        return next(iter(cls.NODE_INDEX_FIELDS), None)
+        return min(cls.NODE_INDEX_FIELDS, default=None)
 
     @classmethod
     def from_data_list(cls, data_list: list[Data]) -> "Batch":

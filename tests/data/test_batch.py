@@ -480,3 +480,30 @@ class TestRepr:
             ]
         )
         assert "batch_size=2" in repr(batch)
+
+
+def test_primary_index_field_is_deterministic():
+    """The primary index field is chosen by name, not by set iteration order.
+
+    ``next(iter(set))`` varies with the per-process hash seed, so the same
+    batch either collated or raised depending on the process; alphabetical
+    choice is stable.
+    """
+
+    @dataclass
+    class TwoIndexData(Data):
+        face: jnp.ndarray | None = None
+        tetra: jnp.ndarray | None = None
+
+    @dataclass
+    class TwoIndexBatch(Batch):
+        face: jnp.ndarray | None = None
+        tetra: jnp.ndarray | None = None
+
+        NODE_INDEX_FIELDS: ClassVar[set[str]] = {"tetra", "face"}
+        _DATA_CLASS: ClassVar[type | None] = TwoIndexData
+
+        def __eq__(self, other: object) -> bool:
+            return Batch.__eq__(self, other)
+
+    assert TwoIndexBatch._primary_index_field() == "face"

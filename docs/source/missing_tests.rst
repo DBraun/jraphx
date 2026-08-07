@@ -8,16 +8,16 @@ does not exist or is out of scope.
 Current Coverage
 ----------------
 
-The suite contains 1174 tests. Counts below are collected test cases, so
+The suite contains 1215 tests. Counts below are collected test cases, so
 parametrized tests contribute one entry per parameter set.
 
 Core Data Structures
 ~~~~~~~~~~~~~~~~~~~~
 
 - ``tests/data/test_data.py`` -- ``Data`` construction, attribute access, node and
-  edge counts, pytree round-trips (28)
+  edge counts, pytree round-trips (30)
 - ``tests/data/test_batch.py`` -- ``Batch`` collation, node-index offsetting,
-  unbatching, subclass configuration, pytree behaviour under ``jax.jit`` (46)
+  unbatching, subclass configuration, pytree behaviour under ``jax.jit`` (47)
 
 Convolution Layers
 ~~~~~~~~~~~~~~~~~~
@@ -28,28 +28,28 @@ Convolution Layers
 - ``tests/nn/conv/test_gcn_conv.py`` -- symmetric normalization, weighted degree,
   ``improved``, self-loop handling, the explicit ``precompute_norm`` cache (28)
 - ``tests/nn/conv/test_gat_conv.py`` -- per-head attention normalization, edge
-  features, multi-head concat and averaging (15)
+  features, multi-head concat and averaging (20)
 - ``tests/nn/conv/test_gatv2_conv.py`` -- GATv2 attention, including the per-head
-  softmax property (10)
+  softmax property (15)
 - ``tests/nn/conv/test_sage_conv.py`` -- aggregations, root weight, bipartite
-  input with and without an explicit ``size`` (18)
-- ``tests/nn/conv/test_gin_conv.py`` -- ``eps`` and ``train_eps``, bipartite input (10)
+  input with and without an explicit ``size`` (20)
+- ``tests/nn/conv/test_gin_conv.py`` -- ``eps`` and ``train_eps``, bipartite input (11)
 - ``tests/nn/conv/test_edge_conv.py`` -- ``EdgeConv`` and ``DynamicEdgeConv``,
-  including single evaluation of a stateful inner network (18)
+  including single evaluation of a stateful inner network (19)
 - ``tests/nn/conv/test_transformer_conv.py`` -- scaled dot-product attention,
-  edge features on both keys and values, ``beta`` and root weight (14)
+  edge features on both keys and values, ``beta`` and root weight (18)
 
 Utility Functions
 ~~~~~~~~~~~~~~~~~
 
 - ``tests/utils/test_scatter.py`` -- ``scatter_add``/``mean``/``max``/``min``/
-  ``std``/``logsumexp``, dtype preservation, empty segments (21)
+  ``std``/``logsumexp``, dtype preservation, empty segments (25)
 - ``tests/utils/test_scatter_softmax.py`` -- ``scatter_softmax``,
-  ``scatter_log_softmax``, ``masked_scatter_softmax``, fully masked groups (13)
+  ``scatter_log_softmax``, ``masked_scatter_softmax``, fully masked groups (15)
 - ``tests/utils/test_coalesce.py`` -- reduction modes, sortedness, large node
   counts (13)
-- ``tests/utils/test_loop.py`` -- self-loop addition and removal, ``fill_value`` (17)
-- ``tests/utils/test_degree.py`` -- ``degree``, ``in_degree``, ``out_degree`` (7)
+- ``tests/utils/test_loop.py`` -- self-loop addition and removal, ``fill_value`` (18)
+- ``tests/utils/test_degree.py`` -- ``degree``, ``in_degree``, ``out_degree`` (9)
 - ``tests/utils/test_convert.py`` -- ``to_undirected``, ``to_dense_adj``,
   ``to_edge_index`` (13)
 
@@ -58,7 +58,7 @@ Models
 
 - ``tests/nn/models/test_basic_gnn.py`` -- the prebuilt ``GCN``, ``GAT``,
   ``GraphSAGE`` and ``GIN`` stacks across layer counts, normalizations, jumping
-  knowledge modes and dropout (772)
+  knowledge modes and dropout (776)
 - ``tests/nn/models/test_mlp.py`` -- feature lists, normalization, ``plain_last`` (23)
 - ``tests/nn/models/test_jumping_knowledge.py`` -- ``cat``, ``max`` and ``lstm``
   modes (9)
@@ -67,7 +67,7 @@ Pooling Operations
 ~~~~~~~~~~~~~~~~~~
 
 - ``tests/nn/pool/test_glob.py`` -- global add/mean/max/min/sort/softmax pooling,
-  empty graphs, node features of arbitrary rank (17)
+  empty graphs, node features of arbitrary rank (24)
 - ``tests/nn/pool/test_topk_pool.py`` -- ``TopKPooling`` and ``SAGPooling``:
   ``ratio`` typing, ``min_score``, the score gate and edge relabeling (26)
 
