@@ -254,6 +254,9 @@ Trained weights still load (subject to the state-layout notes above), but output
 
 **Other Changes**
 
+* Type annotations use :obj:`jax.Array`, the canonical public name of the array type,
+  instead of the ``jnp.ndarray`` alias -- in the library, the tests and the
+  documentation. No runtime behavior changes.
 * ``mypy src/`` passes under the project's strict configuration and is a required CI
   check. It previously had no execution path at all -- no CI job, no ``typecheck`` Make
   rule -- and reported 118 errors, among them the missing-``rngs`` crashes above.
