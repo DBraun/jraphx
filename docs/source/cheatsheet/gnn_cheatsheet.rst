@@ -58,6 +58,12 @@ Graph Neural Network Operators
       - ✓
       - ✓
       - ✓
+    * - :class:`~jraphx.nn.conv.GINEConv` (`Paper <https://arxiv.org/abs/1905.12265>`__)
+      -
+      - ✓
+      - ✓
+      - ✓
+      - ✓
     * - :class:`~jraphx.nn.conv.EdgeConv` (`Paper <https://arxiv.org/abs/1801.07829>`__)
       -
       -

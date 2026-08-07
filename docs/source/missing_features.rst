@@ -11,7 +11,8 @@ High Priority (Core GNN functionality)
 Convolution Layers
 ~~~~~~~~~~~~~~~~~~
 
-``GCNConv``, ``GATConv``, ``GATv2Conv``, ``SAGEConv``, ``GINConv``, ``EdgeConv``,
+``GCNConv``, ``GATConv``, ``GATv2Conv``, ``SAGEConv``, ``GINConv``, ``GINEConv``,
+``EdgeConv``,
 ``DynamicEdgeConv`` and ``TransformerConv`` are implemented, along with the
 ``MessagePassing`` base class. Still missing:
 

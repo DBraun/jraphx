@@ -1,11 +1,14 @@
-"""Test cases for JraphX GINConv layer converted from PyTorch Geometric tests."""
+"""Test cases for JraphX GINConv and GINEConv layers converted from PyTorch Geometric tests."""
 
+import jax
+import pytest
 from flax import nnx
 from jax import numpy as jnp
 from jax import random
 
-from jraphx.nn.conv import GINConv
+from jraphx.nn.conv import GINConv, GINEConv
 from jraphx.nn.models import MLP
+from jraphx.utils import scatter_add
 
 
 def test_gin_conv_basic():
@@ -202,10 +205,8 @@ def test_gin_conv_different_dtypes():
 
 
 # TODO: The following PyG GIN test features are not implemented in JraphX:
-# - GINE (GIN with Edge features) - Separate layer not implemented yet
 # - Sparse tensor support (adj matrices) - JAX doesn't have direct equivalent
 # - TorchScript JIT compilation - JAX uses different compilation (jax.jit)
-# - Bipartite message passing with tuple input (x1, x2) - Not directly supported
 # - Static graph processing with batch dimension - Different batching approach
 # - Complex sparse matrix operations - Beyond current scope
 # - torch_sparse integration - Not applicable to JAX
@@ -228,3 +229,208 @@ def test_gin_conv_default_eps_is_zero():
     nn = MLP([8, 16], rngs=nnx.Rngs(0))
     conv = GINConv(nn, rngs=nnx.Rngs(1))
     assert conv.eps == 0.0
+
+
+def test_gine_conv_basic():
+    """Test basic GINE convolution functionality."""
+    key = random.key(42)
+    x1 = random.normal(key, (4, 16))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+    edge_attr = jnp.array([1, 2, 3, 4], dtype=jnp.float32).reshape(-1, 1)
+
+    nn = MLP([16, 32, 32], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn, train_eps=True, edge_dim=1, rngs=nnx.Rngs(1))
+
+    assert "GINEConv" in str(conv)
+
+    out = conv(x1, edge_index, edge_attr)
+    assert out.shape == (4, 32)
+
+
+def test_gine_conv_matches_documented_operator():
+    """The forward is exactly nn((1 + eps) * x_i + sum_j relu(x_j + lin(e_ji)))."""
+    rng = jax.random.key(7)
+    k1, k2 = jax.random.split(rng)
+    x = jax.random.normal(k1, (4, 5))
+    edge_index = jnp.array([[0, 1, 2, 3, 1], [1, 2, 3, 0, 0]])
+    edge_attr = jax.random.normal(k2, (5, 3))
+
+    mlp = MLP([5, 7, 7], rngs=nnx.Rngs(0))
+    conv = GINEConv(mlp, eps=0.3, edge_dim=3, rngs=nnx.Rngs(1))
+
+    out = conv(x, edge_index, edge_attr)
+
+    messages = nnx.relu(x[edge_index[0]] + conv.lin(edge_attr))
+    aggregated = scatter_add(messages, edge_index[1], dim_size=4)
+    expected = mlp((1 + 0.3) * x + aggregated)
+
+    assert jnp.allclose(out, expected, atol=1e-6)
+
+
+def test_gine_conv_bipartite():
+    """A (x_src, x_dst) pair aggregates into the target set with its root term."""
+    x_src = random.normal(random.key(42), (4, 16))
+    x_dst = random.normal(random.key(123), (2, 16))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+    edge_attr = jnp.array([1, 2, 3, 4], dtype=jnp.float32).reshape(-1, 1)
+
+    nn = MLP([16, 32, 32], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn, eps=0.5, edge_dim=1, rngs=nnx.Rngs(1))
+
+    out = conv((x_src, x_dst), edge_index, edge_attr)
+    assert out.shape == (2, 32)
+
+    messages = nnx.relu(x_src[edge_index[0]] + conv.lin(edge_attr))
+    aggregated = scatter_add(messages, edge_index[1], dim_size=2)
+    expected = nn((1 + 0.5) * x_dst + aggregated)
+    assert jnp.allclose(out, expected, atol=1e-6)
+
+
+def test_gine_conv_eps_parameter():
+    """Test GINE with different epsilon configurations."""
+    x = random.normal(random.key(42), (4, 16))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+    edge_attr = jnp.array([1, 2, 3, 4], dtype=jnp.float32).reshape(-1, 1)
+
+    # Fixed eps
+    nn1 = MLP([16, 32, 32], rngs=nnx.Rngs(0))
+    conv1 = GINEConv(nn1, eps=0.5, train_eps=False, edge_dim=1, rngs=nnx.Rngs(1))
+    out1 = conv1(x, edge_index, edge_attr)
+    assert out1.shape == (4, 32)
+    assert conv1.eps == 0.5
+
+    # Trainable eps starts at the same value and is a Param
+    nn2 = MLP([16, 32, 32], rngs=nnx.Rngs(0))
+    conv2 = GINEConv(nn2, eps=0.5, train_eps=True, edge_dim=1, rngs=nnx.Rngs(1))
+    out2 = conv2(x, edge_index, edge_attr)
+    assert isinstance(conv2.eps, nnx.Param)
+    assert jnp.allclose(out1, out2, atol=1e-6)
+
+
+def test_gine_conv_different_networks():
+    """Test GINE with different neural network architectures."""
+    x = random.normal(random.key(42), (4, 16))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+    edge_attr = random.normal(random.key(7), (4, 16))
+
+    nn_simple = MLP([16, 32], rngs=nnx.Rngs(0))
+    conv_simple = GINEConv(nn_simple)
+    out_simple = conv_simple(x, edge_index, edge_attr)
+    assert out_simple.shape == (4, 32)
+
+    nn_deep = MLP([16, 32, 64, 32], rngs=nnx.Rngs(0))
+    conv_deep = GINEConv(nn_deep)
+    out_deep = conv_deep(x, edge_index, edge_attr)
+    assert out_deep.shape == (4, 32)
+
+    assert not jnp.allclose(out_simple, out_deep)
+
+
+def test_gine_conv_edge_attr_changes_output():
+    """Different edge features must produce different outputs."""
+    x = random.normal(random.key(42), (4, 16))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+    edge_attr1 = random.normal(random.key(123), (4, 8))
+    edge_attr2 = random.normal(random.key(456), (4, 8))
+
+    nn = MLP([16, 32, 32], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn, edge_dim=8, rngs=nnx.Rngs(1))
+
+    out1 = conv(x, edge_index, edge_attr1)
+    out2 = conv(x, edge_index, edge_attr2)
+
+    assert not jnp.allclose(out1, out2)
+
+
+def test_gine_conv_shapes():
+    """Test GINE with different input shapes."""
+    nn = MLP([10, 20], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn, edge_dim=1, rngs=nnx.Rngs(1))
+
+    for num_nodes in [2, 5, 10]:
+        x = jnp.ones((num_nodes, 10))
+        # Simple ring graph
+        edge_index = jnp.array(
+            [jnp.arange(num_nodes), jnp.concatenate([jnp.arange(1, num_nodes), jnp.array([0])])]
+        )
+        edge_attr = jnp.arange(num_nodes, dtype=jnp.float32).reshape(-1, 1)
+        out = conv(x, edge_index, edge_attr)
+        assert out.shape == (num_nodes, 20)
+
+
+def test_gine_conv_deterministic():
+    """Test that GINE is deterministic with same inputs."""
+    nn = MLP([6, 12], rngs=nnx.Rngs(42))
+    conv = GINEConv(nn, edge_dim=1, rngs=nnx.Rngs(43))
+
+    x = jnp.ones((4, 6))
+    edge_index = jnp.array([[0, 1, 2, 3], [1, 2, 3, 0]])
+    edge_attr = jnp.array([1, 2, 3, 4], dtype=jnp.float32).reshape(-1, 1)
+
+    out1 = conv(x, edge_index, edge_attr)
+    out2 = conv(x, edge_index, edge_attr)
+
+    assert jnp.allclose(out1, out2)
+
+
+def test_gine_conv_requires_edge_attr():
+    """GINEConv without edge features is not GINConv; it refuses to run."""
+    nn = MLP([6, 12], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn)
+
+    x = jnp.ones((3, 6))
+    edge_index = jnp.array([[0, 1], [1, 2]])
+
+    with pytest.raises(RuntimeError):
+        conv(x, edge_index)
+
+
+def test_gine_conv_rejects_mismatched_edge_width_without_projection():
+    """Without ``edge_dim``, edge features must already have the node width.
+
+    Broadcasting a narrower edge feature against ``x_j`` would silently compute
+    something other than :math:`x_j + e_{j,i}`; PyG raises here too.
+    """
+    nn = MLP([6, 12], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn)
+
+    x = jnp.ones((3, 6))
+    edge_index = jnp.array([[0, 1], [1, 2]])
+    narrow_edge_attr = jnp.ones((2, 1))
+
+    with pytest.raises(ValueError):
+        conv(x, edge_index, narrow_edge_attr)
+
+
+def test_gine_conv_edge_dim_requires_rngs():
+    """The edge projection draws parameters, so ``edge_dim`` needs ``rngs``."""
+    nn = MLP([6, 12], rngs=nnx.Rngs(0))
+
+    with pytest.raises(ValueError):
+        GINEConv(nn, edge_dim=3)
+
+
+def test_gine_conv_infers_width_from_sequential():
+    """A ``nnx.Sequential`` wrapped network exposes its first layer's width."""
+    seq = nnx.Sequential(nnx.Linear(5, 7, rngs=nnx.Rngs(0)), nnx.relu)
+    conv = GINEConv(seq, edge_dim=3, rngs=nnx.Rngs(1))
+    assert conv.lin.kernel.shape == (3, 5)
+
+    x = jnp.ones((3, 5))
+    edge_index = jnp.array([[0, 1], [1, 2]])
+    edge_attr = jnp.ones((2, 3))
+    out = conv(x, edge_index, edge_attr)
+    assert out.shape == (3, 7)
+
+
+def test_gine_conv_different_dtypes():
+    """Test GINE with different input dtypes."""
+    nn = MLP([3, 6], rngs=nnx.Rngs(0))
+    conv = GINEConv(nn, edge_dim=1, rngs=nnx.Rngs(1))
+
+    edge_index = jnp.array([[0, 1], [1, 0]])
+
+    x_f32 = jnp.ones((2, 3), dtype=jnp.float32)
+    edge_attr_f32 = jnp.array([1, 2], dtype=jnp.float32).reshape(-1, 1)
+    out_f32 = conv(x_f32, edge_index, edge_attr_f32)
+    assert out_f32.dtype == jnp.float32

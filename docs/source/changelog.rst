@@ -254,6 +254,13 @@ Trained weights still load (subject to the state-layout notes above), but output
 
 **Other Changes**
 
+* New :class:`~jraphx.nn.conv.GINEConv` layer -- :class:`~jraphx.nn.conv.GINConv` with
+  edge features fused into every message, from `"Strategies for Pre-training Graph
+  Neural Networks" <https://arxiv.org/abs/1905.12265>`_ -- contributed by
+  `@jiinyih <https://github.com/jiinyih>`_. Edge features of a different width than the
+  nodes are projected via ``edge_dim``; without ``edge_dim`` a width mismatch raises
+  ``ValueError``, as in PyG, rather than silently broadcasting. Supports bipartite
+  ``(x_src, x_dst)`` input.
 * Type annotations use :obj:`jax.Array`, the canonical public name of the array type,
   instead of the ``jnp.ndarray`` alias -- in the library, the tests and the
   documentation. No runtime behavior changes.

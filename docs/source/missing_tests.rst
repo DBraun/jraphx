@@ -8,7 +8,7 @@ does not exist or is out of scope.
 Current Coverage
 ----------------
 
-The suite contains 1215 tests. Counts below are collected test cases, so
+The suite contains 1228 tests. Counts below are collected test cases, so
 parametrized tests contribute one entry per parameter set.
 
 Core Data Structures
@@ -33,7 +33,9 @@ Convolution Layers
   softmax property (15)
 - ``tests/nn/conv/test_sage_conv.py`` -- aggregations, root weight, bipartite
   input with and without an explicit ``size`` (20)
-- ``tests/nn/conv/test_gin_conv.py`` -- ``eps`` and ``train_eps``, bipartite input (11)
+- ``tests/nn/conv/test_gin_conv.py`` -- ``GINConv`` and ``GINEConv``: ``eps`` and
+  ``train_eps``, bipartite input, edge-feature fusion and the ``edge_dim``
+  projection (24)
 - ``tests/nn/conv/test_edge_conv.py`` -- ``EdgeConv`` and ``DynamicEdgeConv``,
   including single evaluation of a stateful inner network (19)
 - ``tests/nn/conv/test_transformer_conv.py`` -- scaled dot-product attention,

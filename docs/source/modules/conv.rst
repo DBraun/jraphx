@@ -247,6 +247,44 @@ GINConv
 
       out = conv(x, edge_index)
 
+GINEConv
+~~~~~~~~
+
+.. autoclass:: GINEConv
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   GIN with edge features from `Hu et al. (2020) <https://arxiv.org/abs/1905.12265>`_.
+
+   **Key Features:**
+
+   - GIN's aggregation with edge features fused into every message
+   - Edge features of a different width are linearly projected via ``edge_dim``
+   - Learnable or fixed epsilon parameter
+
+   **Example:**
+
+   .. code-block:: python
+
+      from jraphx.nn.conv import GINEConv
+      from jraphx.nn.models import MLP
+      import flax.nnx as nnx
+
+      mlp = MLP(
+          feature_list=[16, 32, 32],
+          rngs=nnx.Rngs(0)
+      )
+
+      conv = GINEConv(
+          nn=mlp,
+          eps=0.0,
+          edge_dim=8,  # Project 8-wide edge features to the node width
+          rngs=nnx.Rngs(1)
+      )
+
+      out = conv(x, edge_index, edge_attr=edge_attr)
+
 EdgeConv
 ~~~~~~~~
 
