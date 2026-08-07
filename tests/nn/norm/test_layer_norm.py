@@ -136,7 +136,7 @@ def test_layer_norm_graph_mode_partial_affine(use_bias, use_scale):
 
 
 def test_layer_norm_graph_mode_dtype():
-    """Graph mode honours the ``dtype`` argument, like node mode."""
+    """Graph mode honors the ``dtype`` argument, like node mode."""
     key = random.PRNGKey(11)
     x = random.normal(key, (8, 4))
     batch = jnp.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32)

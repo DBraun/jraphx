@@ -17,8 +17,8 @@ class SAGEConv(MessagePassing):
         \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
         \mathrm{mean}_{j \in \mathcal{N(i)}} \mathbf{x}_j
 
-    The neighbour transformation :math:`\mathbf{W}_2` is applied to the
-    *aggregated* neighbourhood, as the equation above shows. This is what the
+    The neighbor transformation :math:`\mathbf{W}_2` is applied to the
+    *aggregated* neighborhood, as the equation above shows. This is what the
     :obj:`aggr="max"` variant needs: an elementwise maximum does not commute
     with a linear map, so aggregating in the input space is the difference
     between :math:`\mathbf{W}_2 (\max_j \mathbf{x}_j)` and the wrong

@@ -37,7 +37,7 @@ def _accumulator_dtype(dtype: jnp.dtype) -> jnp.dtype:
     """Returns the dtype a summation over ``dtype`` should accumulate in.
 
     Reductions that divide by a member count are widened to at least float32.
-    bfloat16 and float16 saturate far too early to total a real neighbourhood:
+    bfloat16 and float16 saturate far too early to total a real neighborhood:
     bfloat16 has 8 mantissa bits, so its consecutive integers stop at 256 and both
     the running total and the count freeze there, which skews the result by a
     degree-dependent factor. Integer dtypes are left alone so that exact integer

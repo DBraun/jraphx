@@ -334,7 +334,7 @@ def test_gat_conv_does_not_duplicate_existing_self_loops():
 
     PyG removes self-loops before inserting its own. Adding a second loop for a node
     that already had one roughly doubles its self-attention mass and correspondingly
-    down-weights its real neighbours, so the output for that node must match what the
+    down-weights its real neighbors, so the output for that node must match what the
     layer produces on the same graph with the loop stripped out beforehand.
     """
     x = jnp.arange(6, dtype=jnp.float32).reshape(3, 2)

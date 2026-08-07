@@ -258,15 +258,15 @@ def test_dynamic_edge_conv_basic():
 
 
 def test_dynamic_edge_conv_aggregates_over_own_neighbors():
-    """Each node's output must depend on the nodes *it* selected as neighbours.
+    """Each node's output must depend on the nodes *it* selected as neighbors.
 
     A k-NN relation is not symmetric, so emitting ``edge_index`` with the query in row 0
     would build the reverse graph: every node would aggregate over the nodes that picked
-    it instead of over its own neighbours. Perturbing a node's own neighbour must move
-    its output, and perturbing a non-neighbour must not.
+    it instead of over its own neighbors. Perturbing a node's own neighbor must move
+    its output, and perturbing a non-neighbor must not.
     """
-    # Node 0 -> 1, node 1 -> 2, node 2 -> 0. Node 0's neighbour is 1, and node 0 is
-    # node 2's neighbour, so the two orientations are distinguishable.
+    # Node 0 -> 1, node 1 -> 2, node 2 -> 0. Node 0's neighbor is 1, and node 0 is
+    # node 2's neighbor, so the two orientations are distinguishable.
     knn_indices = jnp.array([[1], [2], [0]])
     x = jnp.array([[0.0, 0.0], [1.0, 0.0], [5.0, 0.0]])
 

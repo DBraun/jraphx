@@ -31,7 +31,7 @@ def test_to_undirected_adds_reverse_edges():
 
 
 def test_to_undirected_merges_duplicate_attributes():
-    """``reduce`` is honoured when merging duplicated edges."""
+    """``reduce`` is honored when merging duplicated edges."""
     edge_index = jnp.array([[0, 0], [1, 1]])
     edge_attr = jnp.array([1.0, 2.0])
 
@@ -52,7 +52,7 @@ def test_to_undirected_degree_is_not_doubled():
     assert jnp.allclose(degree(out_index[1], num_nodes=2), jnp.array([1.0, 1.0]))
 
 
-def test_to_undirected_honours_num_nodes():
+def test_to_undirected_honors_num_nodes():
     """Isolated nodes are allowed via an explicit ``num_nodes``."""
     edge_index = jnp.array([[0], [1]])
 

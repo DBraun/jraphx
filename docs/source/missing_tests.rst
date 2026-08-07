@@ -17,7 +17,7 @@ Core Data Structures
 - ``tests/data/test_data.py`` -- ``Data`` construction, attribute access, node and
   edge counts, pytree round-trips (30)
 - ``tests/data/test_batch.py`` -- ``Batch`` collation, node-index offsetting,
-  unbatching, subclass configuration, pytree behaviour under ``jax.jit`` (47)
+  unbatching, subclass configuration, pytree behavior under ``jax.jit`` (47)
 
 Convolution Layers
 ~~~~~~~~~~~~~~~~~~
@@ -131,7 +131,7 @@ Not Covered - PyTorch-Specific
 
 These rely on PyTorch functionality with no JAX equivalent:
 
-- ``torch.jit.script()`` compilation and TorchScript behaviour. The JAX analogue
+- ``torch.jit.script()`` compilation and TorchScript behavior. The JAX analog
   is :obj:`jax.jit`, which the suite exercises directly where a layer supports it.
 - ``test_fused_gat_conv.py``, the ``tests/nn/conv/cugraph/`` tree, and GPU memory
   management -- CUDA kernel specialisations.

@@ -32,7 +32,7 @@ def _add_attention_self_loops(
       out of range, and :func:`jax.numpy.take` clamps such reads to the last row
       rather than raising.
     * A node that arrives with a self-loop must not end up with two, or its
-      self-attention mass is counted twice and its real neighbours are
+      self-attention mass is counted twice and its real neighbors are
       correspondingly down-weighted. Dropping the duplicate column would make the
       edge count data-dependent and break :obj:`jax.jit`, so it is reported back
       instead; the caller drives its attention logit to :math:`-\infty`, which is
@@ -303,7 +303,7 @@ class MessagePassing(Module):
         The base class provides no fused path and always raises; override this
         hook when message computation and aggregation can be expressed in a
         single pass, *e.g.* when a sum aggregation of linearly transformed
-        neighbours does not need all messages materialized.
+        neighbors does not need all messages materialized.
         :meth:`propagate` dispatches here only for subclasses that override it,
         and then calls neither :meth:`message` nor :meth:`aggregate`; it still
         passes the returned array through :meth:`update`.
@@ -313,7 +313,7 @@ class MessagePassing(Module):
         ``x[0]`` the source set -- and not the per-edge gather, and
         ``edge_index`` is the raw edge index, whose rows are ``(source, target)``
         for :obj:`flow="source_to_target"` and ``(target, source)`` otherwise.
-        Gathering the endpoints and honouring :attr:`flow` is therefore the
+        Gathering the endpoints and honoring :attr:`flow` is therefore the
         override's own job.
 
         Args:
@@ -342,7 +342,7 @@ class MessagePassing(Module):
         signatures genuinely differ: :class:`GCNConv` takes ``edge_weight``,
         :class:`GATConv` and :class:`GATv2Conv` return a ``(features, attention)``
         tuple when asked for attention weights, and :class:`EdgeConv` accepts
-        precomputed neighbour indices. The layers are therefore not substitutable
+        precomputed neighbor indices. The layers are therefore not substitutable
         for one another, and this base signature deliberately imposes no contract
         beyond "callable". Consult the concrete layer's own annotations.
 

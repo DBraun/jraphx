@@ -165,7 +165,7 @@ def test_gat(out_dim, dropout, act, norm, jk):
 @pytest.mark.parametrize("jk", jks)
 @pytest.mark.parametrize("model_cls", [GCN, GraphSAGE, GIN, GAT])
 def test_one_layer_gnn(out_dim, jk, model_cls):
-    """A single-layer model honours out_features exactly like a deeper one."""
+    """A single-layer model honors out_features exactly like a deeper one."""
     x, edge_index = create_test_data()
     out_features = 16 if out_dim is None else out_dim
 
@@ -212,7 +212,7 @@ def test_batch_processing():
 # - test_basic_gnn_cache() - PyG-specific caching mechanism
 
 # TODO: PyG models not yet implemented in JraphX:
-# - PNA (Principal Neighbourhood Aggregation)
+# - PNA (Principal Neighborhood Aggregation)
 # - EdgeCNN (EdgeConv)
 
 

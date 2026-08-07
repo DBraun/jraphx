@@ -75,7 +75,7 @@ migrations listed below.
 * ``TopKPooling``/``SAGPooling`` interpret ``ratio`` by type, matching PyG: a
   :obj:`float` keeps :math:`\lceil \mathrm{ratio} \cdot N_i \rceil` nodes per graph and
   an :obj:`int` keeps exactly that many. ``ratio=2.0`` previously kept two nodes and
-  now keeps every node; write ``ratio=2`` for the old behaviour.
+  now keeps every node; write ``ratio=2`` for the old behavior.
 * Pooling is explicit about traceability. ``global_add_pool``, ``global_mean_pool``,
   ``global_max_pool`` and ``global_min_pool`` raise a ``ValueError`` when ``batch`` is a
   tracer and ``size`` is omitted -- pass ``size=<num_graphs>`` inside :obj:`jax.jit` or
@@ -142,14 +142,14 @@ Trained weights still load (subject to the state-layout notes above), but output
   previously divided by :math:`\lVert p \rVert` first, which rescaled the logits and
   collapsed the gate to nearly one-hot at initialization. The ``ratio`` path is
   unchanged and still normalizes by :math:`\lVert p \rVert`.
-* ``SAGEConv`` applies its neighbour transform *after* aggregation, as
+* ``SAGEConv`` applies its neighbor transform *after* aggregation, as
   :math:`\mathbf{W}_2 \cdot \mathrm{aggr}_j \mathbf{x}_j`. Only ``aggr="max"`` changes:
   an elementwise maximum does not commute with a linear map, so the previous ordering
   computed :math:`\max_j (\mathbf{W}_2 \mathbf{x}_j)` -- a maximum taken in the output
   space, mixing columns drawn from different source nodes. ``aggr="mean"``/``"gcn"`` are
   unaffected, since sum and mean do commute.
-* ``DynamicEdgeConv`` builds the k-NN ``edge_index`` with the neighbour as source and the
-  querying node as target, so a node aggregates over the neighbours *it* selected. The
+* ``DynamicEdgeConv`` builds the k-NN ``edge_index`` with the neighbor as source and the
+  querying node as target, so a node aggregates over the neighbors *it* selected. The
   rows were previously the other way round, which built the reverse k-NN graph: because
   "j is among i's k nearest" is not symmetric, every node aggregated over the nodes that
   had selected it, and a node selected by nobody received no messages at all and
@@ -157,7 +157,7 @@ Trained weights still load (subject to the state-layout notes above), but output
 * ``GATConv``/``GATv2Conv`` no longer count a pre-existing self-loop twice. PyG removes
   self-loops before inserting its own; without that removal a node arriving with a loop
   got two, roughly doubling its self-attention mass and correspondingly down-weighting
-  its real neighbours. Dropping the duplicate column would make the edge count
+  its real neighbors. Dropping the duplicate column would make the edge count
   data-dependent and break :obj:`jax.jit`, so its attention logit is driven to
   :math:`-\infty` instead, which is exactly a softmax weight of zero. The duplicate row
   stays in the ``edge_index`` returned by ``return_attention_weights=True``, carrying a

@@ -259,7 +259,7 @@ def test_sage_conv_deterministic():
 def test_sage_conv_max_transforms_after_aggregation():
     """``aggr="max"`` must compute ``W (max_j x_j)``, not ``max_j (W x_j)``.
 
-    An elementwise maximum does not commute with a linear map, so applying the neighbour
+    An elementwise maximum does not commute with a linear map, so applying the neighbor
     transform before aggregation would take the maximum in the *output* space and mix
     columns drawn from different source nodes. Sum and mean are unaffected either way,
     which is exactly why this needs its own test.

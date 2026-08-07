@@ -38,7 +38,7 @@ Convolution Layers
 - **NNConv** - Continuous kernel-based convolution
 - **PANConv** - Path Augmented Graph Neural Networks
 - **PDNConv** - Pathfinder Discovery Networks
-- **PNAConv** - Principal Neighbourhood Aggregation
+- **PNAConv** - Principal Neighborhood Aggregation
 - **PointConv** - Point Convolution for 3D
 - **PPFConv** - Point Pair Feature Convolution
 - **RGCNConv** - Relational Graph Convolutional Networks
@@ -107,7 +107,7 @@ implemented, as are ``MLP`` and ``JumpingKnowledge``. Still missing:
 - **GraphUNet** - Graph U-Net
 - **MetaPath2Vec** - MetaPath2Vec for heterogeneous graphs
 - **Node2Vec** - Node2Vec embeddings
-- **PNA** - Principal Neighbourhood Aggregation networks
+- **PNA** - Principal Neighborhood Aggregation networks
 - **SchNet** - SchNet for molecular property prediction
 - **TGN** - Temporal Graph Networks
 
