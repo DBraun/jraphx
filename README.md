@@ -44,6 +44,7 @@ pip install -e ".[dev]"
 A two-layer GCN over a four-node cycle graph:
 
 ```python
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -56,7 +57,7 @@ class GCN(nnx.Module):
         self.conv1 = GCNConv(in_features, hidden_features, rngs=rngs)
         self.conv2 = GCNConv(hidden_features, num_classes, rngs=rngs)
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, x: jax.Array, edge_index: jax.Array) -> jax.Array:
         x = nnx.relu(self.conv1(x, edge_index))
         return self.conv2(x, edge_index)
 
@@ -70,7 +71,7 @@ model = GCN(in_features=8, hidden_features=16, num_classes=3, rngs=nnx.Rngs(0))
 
 
 @nnx.jit
-def forward(model: GCN, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+def forward(model: GCN, x: jax.Array, edge_index: jax.Array) -> jax.Array:
     return model(x, edge_index)
 
 
