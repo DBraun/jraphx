@@ -318,7 +318,10 @@ Trained weights still load (subject to the state-layout notes above), but output
 * Documentation corrections. Three pages taught a training step wrapped in
   :func:`jax.jit`, where the parameter update is traced on a copy of the module state and
   silently discarded -- no error, a plausible loss, and not one parameter moved. They now
-  use :func:`nnx.jit`, and :doc:`/advanced/jit` explains when each is appropriate. The
+  use :func:`nnx.jit`, and :doc:`/advanced/jit` explains when each is appropriate --
+  including the :func:`nnx.split`/:func:`nnx.merge` functional training loop, under
+  which :func:`jax.jit` is correct because the state is threaded explicitly, and which
+  the Flax performance guide recommends for hot loops. The
   ``MessagePassing`` prose described PyG's ``propagate(**kwargs)`` and ``_i``/``_j``
   argument lifting, neither of which JraphX implements: ``message`` is dispatched
   positionally, so a signature written ``message(self, x_i, x_j)`` binds the *source*

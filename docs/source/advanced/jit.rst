@@ -23,8 +23,11 @@ All **JraphX** layers and models are designed to be JIT-compatible out of the bo
     :class:`~jraphx.nn.norm.BatchNorm` running statistics.
 
     :func:`nnx.jit` understands NNX state and propagates the mutation back out.
-    :func:`jax.jit` is only safe for a genuinely pure function -- a forward pass on a
-    model in evaluation mode, with no parameter update and no RNG draw.
+    :func:`jax.jit` is safe in exactly two situations: a genuinely pure function --
+    a forward pass on a model in evaluation mode, with no parameter update and no
+    RNG draw -- or a *functional training loop* where the state is an explicit
+    argument and return value instead of a hidden mutation (see
+    `Functional training loop with jax.jit`_ below).
 
 Here's how to JIT-compile a simple GNN model:
 
@@ -101,6 +104,59 @@ parameters, so it must be wrapped in :func:`nnx.jit`:
         loss = train_step(model, optimizer, data.x, data.edge_index, targets, train_indices)
         if epoch % 20 == 0:
             print(f'Epoch {epoch}, Loss: {loss:.4f}')
+
+Functional training loop with jax.jit
+-------------------------------------
+
+:func:`jax.jit` *can* compile a training step correctly -- the requirement is that
+every piece of state the step changes is an explicit input and an explicit output.
+:func:`nnx.split` turns the model and optimizer into a static ``graphdef`` plus a
+``state`` pytree; the jitted function merges them into a working copy, runs the
+usual step, and returns the new state, which the loop threads into the next call.
+Nothing is silently discarded, because nothing relies on mutation escaping the
+trace:
+
+.. code-block:: python
+
+    graphdef, state = nnx.split((model, optimizer))
+
+    @jax.jit
+    def functional_train_step(graphdef, state, x, edge_index, targets, train_indices):
+        model, optimizer = nnx.merge(graphdef, state)
+
+        def loss_fn(model):
+            predictions = model(x, edge_index)
+            return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(
+                predictions[train_indices], targets[train_indices]
+            ))
+
+        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        optimizer.update(model, grads)
+        # The updated state is *returned*, not mutated across the jit boundary
+        return nnx.state((model, optimizer)), loss
+
+    for epoch in range(100):
+        state, loss = functional_train_step(
+            graphdef, state, data.x, data.edge_index, targets, train_indices
+        )
+
+    # The original objects went stale the moment ``split`` copied their state;
+    # write the trained state back into them once the loop is done
+    nnx.update((model, optimizer), state)
+
+Dropout keys and :class:`~jraphx.nn.norm.BatchNorm` running statistics live in
+``state`` too, so they advance across steps -- again because they are threaded
+through the return value, not because :func:`jax.jit` knows anything about NNX.
+
+Why prefer this over :func:`nnx.jit`? Performance. :func:`nnx.jit` walks the module
+graph in Python on every call to convert modules to pytrees and back; the
+functional loop pays that cost once, at :func:`nnx.split` time, which the
+`Flax performance guide
+<https://flax.readthedocs.io/en/stable/guides/performance.html#functional-training-loop>`_
+recommends for hot training loops. :func:`nnx.jit` remains the simpler and safer
+default -- there is no stale-object window and no state to thread -- so reach for
+the functional form when the per-step Python overhead actually shows up in a
+profile.
 
 Custom Layer JIT Compatibility
 ------------------------------
@@ -198,7 +254,8 @@ Best Practices
 --------------
 
 1. **JIT the training step with** :func:`nnx.jit`: Compile the entire step for maximum
-   benefit, and reach for :func:`jax.jit` only when nothing is mutated
+   benefit. Reach for :func:`jax.jit` when nothing is mutated, or via the functional
+   training loop above when the per-step Python overhead matters
 2. **Warm up on dummy data**: Compile before timing-critical sections
 3. **Static shapes**: Use fixed-size arrays when possible for better optimization
 4. **Batch processing**: JIT works especially well with batched operations
@@ -221,7 +278,8 @@ Common Pitfalls
 
 - **Mutating state under** :func:`jax.jit`: The most costly pitfall, because it is
   silent. Parameter updates, RNG draws and running statistics do not escape a
-  :func:`jax.jit` boundary; use :func:`nnx.jit` for anything that writes to a module
+  :func:`jax.jit` boundary; use :func:`nnx.jit` for anything that writes to a module,
+  or thread the state explicitly with the functional training loop above
 - **Dynamic shapes**: Avoid operations that change array shapes based on data
 - **Python conditionals**: Use :func:`jnp.where` instead of :obj:`if` statements
 - **Global state**: Avoid modifying global variables inside JIT functions
