@@ -44,7 +44,10 @@ class TransformerConv(MessagePassing):
                 \alpha_{i,j} \mathbf{W}_2 \vec{x}_j \right)}_{=\mathbf{m}_i}
 
             with :math:`\beta_i = \textrm{sigmoid}(\mathbf{w}_5^{\top}
-            [\mathbf{W}_1 \mathbf{x}_i, \mathbf{m}_i, \mathbf{W}_1 \mathbf{x}_i - \mathbf{m}_i])`.
+            [\mathbf{m}_i, \mathbf{W}_1 \mathbf{x}_i, \mathbf{m}_i - \mathbf{W}_1
+            \mathbf{x}_i])`. The block order matches PyG's implementation (its
+            own docstring lists the reversed order, which its code does not
+            use), so :obj:`lin_beta` weights transplant directly.
             Requires :obj:`root_weight=True`; without the skip term there is
             nothing to gate against, so :obj:`beta` is ignored.
             (default: :obj:`False`)
@@ -184,7 +187,9 @@ class TransformerConv(MessagePassing):
         if self.lin_skip is not None:
             root = self.lin_skip(x)
             if self.lin_beta is not None:
-                beta_input = jnp.concatenate([root, out, root - out], axis=-1)
+                # Block order [out, root, out - root] follows PyG's code, so a
+                # transplanted lin_beta computes the same gate
+                beta_input = jnp.concatenate([out, root, out - root], axis=-1)
                 beta = nnx.sigmoid(self.lin_beta(beta_input))
                 out = beta * root + (1 - beta) * out
             else:

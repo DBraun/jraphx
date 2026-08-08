@@ -89,6 +89,17 @@ Packaging
 - ``tests/test_version.py`` -- keeps ``__version__`` and the newest changelog
   heading in lockstep (3)
 
+torch_geometric Parity
+~~~~~~~~~~~~~~~~~~~~~~
+
+``tests/parity/`` transplants weights layer by layer into an installed
+:obj:`torch_geometric` and compares outputs elementwise: convolutions
+(``test_conv_parity.py``), normalization layers (``test_norm_parity.py``) and
+scatter/loop/graph utilities plus poolings (``test_utils_parity.py``). These
+tests require ``torch`` and ``torch_geometric`` and skip -- as whole modules,
+so they do not appear in the counts above -- when either is absent; CI runs
+them in a dedicated job with CPU torch installed.
+
 Not Covered - Feature Not Implemented
 -------------------------------------
 

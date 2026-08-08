@@ -16,13 +16,13 @@ def degree(
 
     Args:
         index (jax.Array): Index tensor.
-        num_nodes (int, optional): The number of nodes, *i.e.*
-            :obj:`max_val + 1` of :attr:`index`. (default: :obj:`None`)
-        dtype (:obj:`jax.dtype`, optional): The desired data type of the
+        num_nodes (int, optional): The number of nodes, *i.e.* the maximum
+            entry of ``index`` plus one. (default: :obj:`None`)
+        dtype (jnp.dtype, optional): The desired data type of the
             returned tensor.
 
     Returns:
-        jax.Array: Node degrees.
+        Node degrees, one entry per node.
 
     Example:
         >>> import jax.numpy as jnp

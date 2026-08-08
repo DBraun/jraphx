@@ -74,10 +74,12 @@ examples = [
     "grain>=0.2.12"
 ]
 docs = [
-    "sphinx==5.1.1",
-    "sphinx-autodoc-typehints==1.19.2",
+    # sphinx 7.4 is the first release importable on Python 3.13, which this
+    # project's classifiers advertise
+    "sphinx>=7.4",
+    "sphinx-autodoc-typehints>=2.3",
     "sphinx-copybutton>=0.5.2",
-    "sphinx-rtd-theme"
+    "sphinx-rtd-theme>=3.0"
 ]
 all = [
     "jraphx[dev,test,examples,docs]",

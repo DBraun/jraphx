@@ -1,0 +1,5 @@
+
+# Keep the test suite out of the sdist. Without this, setuptools' legacy default
+# template ships exactly one file, tests/test_version.py -- which cannot pass from
+# an sdist install, since it reads docs/source/changelog.rst and docs/ is excluded.
+prune tests

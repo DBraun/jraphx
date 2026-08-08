@@ -143,8 +143,36 @@ jobs:
         run: |
           pytest tests/ -v
 
+  test_pyg_parity:
+    name: Run parity tests against torch_geometric
+    needs: lint
+    runs-on: ubuntu-latest
+    # tests/parity/ transplants weights layer by layer and compares outputs
+    # elementwise against a real torch_geometric, so the PyG-parity claims are
+    # tested rather than hand-derived. The jobs above skip these tests because
+    # torch is not installed there.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies with CPU torch and torch_geometric
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install torch-geometric
+
+      - name: Run parity tests
+        run: |
+          pytest tests/parity/ -v
+
   upload_pypi:
-    needs: [lint, typecheck, build_wheel, build_sdist, test, test_minimum_versions]
+    needs: [lint, typecheck, build_wheel, build_sdist, test, test_minimum_versions, test_pyg_parity]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:

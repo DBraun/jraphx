@@ -1,11 +1,11 @@
 import math
-from typing import Any, Union
+from typing import Union
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.nn import initializers
-from flax.typing import Axes, Dtype, Initializer
+from flax.typing import Dtype, Initializer
 
 
 class LayerNorm(nnx.Module):
@@ -44,12 +44,13 @@ class LayerNorm(nnx.Module):
             (default: :obj:`True`)
         bias_init: Initializer for bias, by default, zero.
         scale_init: Initializer for scale, by default, one.
-        reduction_axes: Axes for computing normalization statistics.
-        feature_axes: Feature axes for learned bias and scaling.
-        axis_name: The axis name used to combine batch statistics from multiple devices.
-        axis_index_groups: Groups of axis indices within that named axis.
-        use_fast_variance: If true, use faster, but less numerically stable variance calculation.
         rngs: Random number generators for initialization.
+
+    .. note::
+        The reduction axes follow from ``mode`` and there is no cross-device
+        statistics synchronization; the ``reduction_axes``, ``feature_axes``,
+        ``axis_name``, ``axis_index_groups`` and ``use_fast_variance``
+        arguments of :class:`flax.nnx.LayerNorm` do not exist here.
     """
 
     def __init__(
@@ -65,11 +66,6 @@ class LayerNorm(nnx.Module):
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
         scale_init: Initializer = initializers.ones_init(),
-        reduction_axes: Axes = -1,
-        feature_axes: Axes = -1,
-        axis_name: str | None = None,
-        axis_index_groups: Any = None,
-        use_fast_variance: bool = True,
         rngs: nnx.Rngs | None = None,
     ):
         self.normalized_shape: tuple[int, ...]
@@ -87,11 +83,6 @@ class LayerNorm(nnx.Module):
         self.use_scale = use_scale
         self.bias_init = bias_init
         self.scale_init = scale_init
-        self.reduction_axes = reduction_axes
-        self.feature_axes = feature_axes
-        self.axis_name = axis_name
-        self.axis_index_groups = axis_index_groups
-        self.use_fast_variance = use_fast_variance
 
         # Learnable parameters - maintain backward compatibility with elementwise_affine
         self.weight: nnx.Param | None = nnx.data(None)

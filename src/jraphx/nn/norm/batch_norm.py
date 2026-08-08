@@ -1,5 +1,3 @@
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -37,8 +35,6 @@ class BatchNorm(nnx.Module):
         use_running_average (bool, optional): If set to :obj:`True`, use
             running statistics instead of batch statistics during evaluation.
             (default: :obj:`False`)
-        axis (int, optional): The feature or non-batch axis of the input.
-            (default: :obj:`-1`)
         dtype: The dtype of the result (default: infer from input and params).
         param_dtype: The dtype passed to parameter initializers (default: float32).
         use_bias (bool, optional): If True, bias (beta) is added.
@@ -47,10 +43,14 @@ class BatchNorm(nnx.Module):
             (default: :obj:`True`)
         bias_init: Initializer for bias, by default, zero.
         scale_init: Initializer for scale, by default, one.
-        axis_name: The axis name used to combine batch statistics from multiple devices.
-        axis_index_groups: Groups of axis indices within that named axis.
-        use_fast_variance: If true, use faster, but less numerically stable variance calculation.
         rngs: Random number generators for initialization.
+
+    .. note::
+        Statistics are always pooled over the node axis with features on the
+        last axis, and there is no cross-device statistics synchronization;
+        the ``axis``, ``axis_name``, ``axis_index_groups`` and
+        ``use_fast_variance`` arguments of :class:`flax.nnx.BatchNorm` do not
+        exist here.
     """
 
     def __init__(
@@ -61,16 +61,12 @@ class BatchNorm(nnx.Module):
         track_running_stats: bool = True,
         use_running_average: bool = False,
         *,
-        axis: int = -1,
         dtype: Dtype | None = None,
         param_dtype: Dtype = jnp.float32,
         use_bias: bool = True,
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
         scale_init: Initializer = initializers.ones_init(),
-        axis_name: str | None = None,
-        axis_index_groups: Any = None,
-        use_fast_variance: bool = True,
         rngs: nnx.Rngs | None = None,
     ):
         self.num_features = num_features
@@ -78,16 +74,12 @@ class BatchNorm(nnx.Module):
         self.momentum = momentum
         self.track_running_stats = track_running_stats
         self.use_running_average = use_running_average
-        self.axis = axis
         self.dtype = dtype
         self.param_dtype = param_dtype
         self.use_bias = use_bias
         self.use_scale = use_scale
         self.bias_init = bias_init
         self.scale_init = scale_init
-        self.axis_name = axis_name
-        self.axis_index_groups = axis_index_groups
-        self.use_fast_variance = use_fast_variance
 
         feature_shape = (num_features,)
 

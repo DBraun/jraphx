@@ -24,6 +24,12 @@ migrations listed below.
 
 **Breaking Changes -- Public API**
 
+* ``BatchNorm`` and ``LayerNorm`` no longer accept the arguments they never read:
+  ``axis``, ``axis_name``, ``axis_index_groups`` and ``use_fast_variance`` on
+  ``BatchNorm``; ``reduction_axes``, ``feature_axes``, ``axis_name``,
+  ``axis_index_groups`` and ``use_fast_variance`` on ``LayerNorm``. All of these were
+  stored and silently ignored -- in particular ``axis_name``, which read as if it
+  synchronized statistics across devices. Passing one now raises ``TypeError``.
 * ``rngs`` is a required keyword-only argument of every layer that owns parameters:
   ``GCNConv``, ``GATConv``, ``GATv2Conv``, ``SAGEConv``, ``TransformerConv``, ``MLP``,
   ``BasicGNN`` and its ``GCN``/``GAT``/``GraphSAGE``/``GIN`` specialisations, and
@@ -231,6 +237,12 @@ Trained weights still load (subject to the state-layout notes above), but output
   are removed first (collapsing duplicates), the per-node loops are appended in node
   order, and a replaced loop keeps its attribute. Duplicated input loops were
   previously all retained, where PyG collapses them.
+* ``TransformerConv(beta=True)`` concatenates its gate input as
+  :math:`[\mathbf{m}_i, \mathbf{W}_1 \mathbf{x}_i, \mathbf{m}_i - \mathbf{W}_1
+  \mathbf{x}_i]`, the order PyG's *implementation* uses -- PyG's docstring lists the
+  reversed order, which its code does not. Found by the weight-transplant parity
+  harness: with the previous order a transplanted ``lin_beta`` computed a different
+  gate.
 
 * ``global_max_pool``/``global_min_pool``/``global_mean_pool`` keep the rank of the node
   features: a 1-D input ``[num_nodes]`` pools to ``[batch_size]``, and inputs such as
@@ -254,6 +266,21 @@ Trained weights still load (subject to the state-layout notes above), but output
 
 **Other Changes**
 
+* A parity suite under ``tests/parity/`` transplants weights layer by layer into an
+  installed :obj:`torch_geometric` and compares outputs elementwise -- convolutions,
+  normalization layers, scatter/loop/graph utilities and poolings. A dedicated CI job
+  installs CPU ``torch`` and ``torch_geometric`` and gates releases on it; the jobs
+  without torch skip the package. The one deliberate divergence (string
+  ``fill_value`` self-loop features on a graph that already carries a loop) is pinned
+  as a strict ``xfail``.
+* The ``docs`` extra installs on Python 3.13: ``sphinx==5.1.1`` and
+  ``sphinx-autodoc-typehints==1.19.2`` -- neither importable there -- are replaced by
+  floors on current releases, and the documentation builds warning-free against
+  sphinx 9.
+* The sdist no longer ships ``tests/test_version.py``, which setuptools' legacy
+  default template included on its own. It was the only test file in the archive and
+  could not pass from an sdist install, since it reads the changelog out of the
+  excluded ``docs/`` tree.
 * New :class:`~jraphx.nn.conv.GINEConv` layer -- :class:`~jraphx.nn.conv.GINConv` with
   edge features fused into every message, from `"Strategies for Pre-training Graph
   Neural Networks" <https://arxiv.org/abs/1905.12265>`_ -- contributed by
