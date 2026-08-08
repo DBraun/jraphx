@@ -50,7 +50,7 @@ class GCN(BasicGNN):
         edge_index: jax.Array,
         edge_weight: jax.Array | None = None,
         num_nodes: int | None = None,
-        dtype: jnp.dtype | None = None,
+        dtype: str | type | jnp.dtype | None = None,
     ) -> None:
         """Fill the normalization cache of every :class:`GCNConv` layer.
 

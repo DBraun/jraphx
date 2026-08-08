@@ -5,7 +5,9 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.nn import initializers
-from flax.typing import Dtype, Initializer
+from flax.typing import Initializer
+
+from jraphx.utils.dtype import parse_dtype
 
 
 class LayerNorm(nnx.Module):
@@ -37,7 +39,10 @@ class LayerNorm(nnx.Module):
             normalized. If `"node"` is used, each node will be considered as
             an element to be normalized. (default: :obj:`"node"`)
         dtype: The dtype of the result (default: infer from input and params).
+            Strings such as ``"bfloat16"`` are resolved with
+            :func:`~jraphx.utils.parse_dtype`.
         param_dtype: The dtype passed to parameter initializers (default: float32).
+            Accepts the same strings.
         use_bias (bool, optional): If True, bias (beta) is added.
             (default: :obj:`True`)
         use_scale (bool, optional): If True, multiply by scale (gamma).
@@ -60,8 +65,8 @@ class LayerNorm(nnx.Module):
         elementwise_affine: bool = True,
         mode: str = "node",
         *,
-        dtype: Dtype | None = None,
-        param_dtype: Dtype = jnp.float32,
+        dtype: str | type | jnp.dtype | None = None,
+        param_dtype: str | type | jnp.dtype = jnp.float32,
         use_bias: bool = True,
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
@@ -77,8 +82,8 @@ class LayerNorm(nnx.Module):
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.mode = mode
-        self.dtype = dtype
-        self.param_dtype = param_dtype
+        self.dtype = None if dtype is None else parse_dtype(dtype)
+        self.param_dtype = parse_dtype(param_dtype)
         self.use_bias = use_bias
         self.use_scale = use_scale
         self.bias_init = bias_init
@@ -92,10 +97,12 @@ class LayerNorm(nnx.Module):
             if rngs is not None:
                 if use_scale:
                     key = rngs.params()
-                    self.weight = nnx.Param(scale_init(key, self.normalized_shape, param_dtype))
+                    self.weight = nnx.Param(
+                        scale_init(key, self.normalized_shape, self.param_dtype)
+                    )
                 if use_bias:
                     key = rngs.params()
-                    self.bias = nnx.Param(bias_init(key, self.normalized_shape, param_dtype))
+                    self.bias = nnx.Param(bias_init(key, self.normalized_shape, self.param_dtype))
             else:
                 # Fallback for backward compatibility when no rngs provided
                 if use_scale:

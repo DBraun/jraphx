@@ -7,6 +7,7 @@ from jax import numpy as jnp
 from jax.ops import segment_sum
 
 from jraphx.nn.conv.message_passing import MessagePassing
+from jraphx.utils.dtype import parse_dtype
 from jraphx.utils.loop import add_self_loops as add_self_loops_fn
 from jraphx.utils.num_nodes import maybe_num_nodes
 
@@ -198,7 +199,7 @@ class GCNConv(MessagePassing):
         num_nodes: int | None = None,
         improved: bool = False,
         add_self_loops: bool = True,
-        dtype: jnp.dtype | None = None,
+        dtype: str | type | jnp.dtype | None = None,
     ) -> tuple[jax.Array, jax.Array]:
         """Apply symmetric GCN normalization to edge weights.
 
@@ -225,7 +226,7 @@ class GCNConv(MessagePassing):
             Tuple of (edge_index, normalized edge_weight)
         """
         num_nodes = maybe_num_nodes(edge_index, num_nodes)
-        dtype = dtype or jnp.float32
+        dtype = jnp.float32 if dtype is None else parse_dtype(dtype)
 
         if edge_weight is None:
             edge_weight = jnp.ones(edge_index.shape[1], dtype=dtype)
@@ -263,7 +264,7 @@ class GCNConv(MessagePassing):
         edge_index: jax.Array,
         edge_weight: jax.Array | None = None,
         num_nodes: int | None = None,
-        dtype: jnp.dtype | None = None,
+        dtype: str | type | jnp.dtype | None = None,
     ) -> None:
         """Fill the normalization cache for a fixed graph.
 

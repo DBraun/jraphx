@@ -3,13 +3,14 @@
 import jax
 from jax import numpy as jnp
 
+from jraphx.utils.dtype import parse_dtype
 from jraphx.utils.num_nodes import maybe_num_nodes
 
 
 def degree(
     index: jax.Array,
     num_nodes: int | None = None,
-    dtype: jnp.dtype | None = None,
+    dtype: str | type | jnp.dtype | None = None,
 ) -> jax.Array:
     r"""Computes the (unweighted) degree of a given one-dimensional index
     tensor.
@@ -18,8 +19,9 @@ def degree(
         index (jax.Array): Index tensor.
         num_nodes (int, optional): The number of nodes, *i.e.* the maximum
             entry of ``index`` plus one. (default: :obj:`None`)
-        dtype (jnp.dtype, optional): The desired data type of the
-            returned tensor.
+        dtype (str or jnp.dtype, optional): The desired data type of the
+            returned tensor; strings such as ``"int32"`` or ``"jnp.float16"``
+            are resolved with :func:`~jraphx.utils.parse_dtype`.
 
     Returns:
         Node degrees, one entry per node.
@@ -31,7 +33,7 @@ def degree(
         Array([3, 1, 1], dtype=int32)
     """
     num_nodes = maybe_num_nodes(index.reshape(1, -1), num_nodes)
-    dtype = dtype or jnp.float32
+    dtype = jnp.float32 if dtype is None else parse_dtype(dtype)
 
     # Direct use of segment_sum is more efficient than scatter_add with ones
     return jax.ops.segment_sum(
@@ -44,7 +46,7 @@ def degree(
 def in_degree(
     edge_index: jax.Array,
     num_nodes: int | None = None,
-    dtype: jnp.dtype | None = None,
+    dtype: str | type | jnp.dtype | None = None,
 ) -> jax.Array:
     """Compute the in-degree of nodes.
 
@@ -65,7 +67,7 @@ def in_degree(
 def out_degree(
     edge_index: jax.Array,
     num_nodes: int | None = None,
-    dtype: jnp.dtype | None = None,
+    dtype: str | type | jnp.dtype | None = None,
 ) -> jax.Array:
     """Compute the out-degree of nodes.
 

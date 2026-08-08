@@ -8,7 +8,7 @@ does not exist or is out of scope.
 Current Coverage
 ----------------
 
-The suite contains 1228 tests. Counts below are collected test cases, so
+The suite contains 1255 tests. Counts below are collected test cases, so
 parametrized tests contribute one entry per parameter set.
 
 Core Data Structures
@@ -52,6 +52,8 @@ Utility Functions
   counts (13)
 - ``tests/utils/test_loop.py`` -- self-loop addition and removal, ``fill_value`` (18)
 - ``tests/utils/test_degree.py`` -- ``degree``, ``in_degree``, ``out_degree`` (9)
+- ``tests/utils/test_dtype.py`` -- ``parse_dtype`` resolution, prefix handling,
+  abstract-category rejection, string dtypes through ``degree`` and ``LayerNorm`` (27)
 - ``tests/utils/test_convert.py`` -- ``to_undirected``, ``to_dense_adj``,
   ``to_edge_index`` (13)
 

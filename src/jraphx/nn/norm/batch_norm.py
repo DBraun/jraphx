@@ -3,7 +3,9 @@ import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.module import first_from
 from flax.nnx.nn import initializers
-from flax.typing import Dtype, Initializer
+from flax.typing import Initializer
+
+from jraphx.utils.dtype import parse_dtype
 
 
 class BatchNorm(nnx.Module):
@@ -36,7 +38,10 @@ class BatchNorm(nnx.Module):
             running statistics instead of batch statistics during evaluation.
             (default: :obj:`False`)
         dtype: The dtype of the result (default: infer from input and params).
+            Strings such as ``"bfloat16"`` are resolved with
+            :func:`~jraphx.utils.parse_dtype`.
         param_dtype: The dtype passed to parameter initializers (default: float32).
+            Accepts the same strings.
         use_bias (bool, optional): If True, bias (beta) is added.
             (default: :obj:`True`)
         use_scale (bool, optional): If True, multiply by scale (gamma).
@@ -61,8 +66,8 @@ class BatchNorm(nnx.Module):
         track_running_stats: bool = True,
         use_running_average: bool = False,
         *,
-        dtype: Dtype | None = None,
-        param_dtype: Dtype = jnp.float32,
+        dtype: str | type | jnp.dtype | None = None,
+        param_dtype: str | type | jnp.dtype = jnp.float32,
         use_bias: bool = True,
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
@@ -74,8 +79,8 @@ class BatchNorm(nnx.Module):
         self.momentum = momentum
         self.track_running_stats = track_running_stats
         self.use_running_average = use_running_average
-        self.dtype = dtype
-        self.param_dtype = param_dtype
+        self.dtype = None if dtype is None else parse_dtype(dtype)
+        self.param_dtype = parse_dtype(param_dtype)
         self.use_bias = use_bias
         self.use_scale = use_scale
         self.bias_init = bias_init
@@ -91,10 +96,10 @@ class BatchNorm(nnx.Module):
             if rngs is not None:
                 if use_scale:
                     key = rngs.params()
-                    self.weight = nnx.Param(scale_init(key, feature_shape, param_dtype))
+                    self.weight = nnx.Param(scale_init(key, feature_shape, self.param_dtype))
                 if use_bias:
                     key = rngs.params()
-                    self.bias = nnx.Param(bias_init(key, feature_shape, param_dtype))
+                    self.bias = nnx.Param(bias_init(key, feature_shape, self.param_dtype))
             else:
                 # Fallback for backward compatibility when no rngs provided
                 if use_scale:

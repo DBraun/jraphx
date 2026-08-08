@@ -288,6 +288,14 @@ Trained weights still load (subject to the state-layout notes above), but output
   nodes are projected via ``edge_dim``; without ``edge_dim`` a width mismatch raises
   ``ValueError``, as in PyG, rather than silently broadcasting. Supports bipartite
   ``(x_src, x_dst)`` input.
+* New :func:`~jraphx.utils.parse_dtype` utility resolving a dtype spec -- a plain or
+  prefixed string (``"float32"``, ``"jnp.bfloat16"``, ``"np.int32"``), a scalar type,
+  or a dtype object -- to the matching jax.numpy scalar type. Every jraphx ``dtype``
+  argument (``degree``/``in_degree``/``out_degree``, ``GCNConv`` normalization,
+  ``BatchNorm``/``LayerNorm`` ``dtype``/``param_dtype``) now routes through it, so a
+  dtype can come straight from a configuration file and an invalid spec fails at the
+  call site with a clear error. Abstract categories such as ``"floating"`` are
+  rejected there rather than surfacing later at the first array construction.
 * Type annotations use :obj:`jax.Array`, the canonical public name of the array type,
   instead of the ``jnp.ndarray`` alias -- in the library, the tests and the
   documentation. No runtime behavior changes.

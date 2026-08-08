@@ -132,6 +132,29 @@ degree
       in_deg = degree(edge_index[1], num_nodes=3)
       out_deg = degree(edge_index[0], num_nodes=3)
 
+parse_dtype
+~~~~~~~~~~~
+
+.. autofunction:: parse_dtype
+
+   Resolve a dtype spec -- a plain or prefixed string, a scalar type, or a
+   dtype object -- to the matching jax.numpy scalar type. Every jraphx
+   ``dtype`` argument accepts these specs, so a dtype can come straight from a
+   configuration file.
+
+   **Example:**
+
+   .. code-block:: python
+
+      from jraphx.utils import degree, parse_dtype
+      import jax.numpy as jnp
+
+      assert parse_dtype("float32") is jnp.float32
+      assert parse_dtype("jnp.bfloat16") is jnp.bfloat16
+
+      edge_index = jnp.array([[0, 1, 2], [1, 2, 0]])
+      deg = degree(edge_index[1], num_nodes=3, dtype="int32")
+
 to_undirected
 ~~~~~~~~~~~~~
 
