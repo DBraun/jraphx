@@ -158,6 +158,12 @@ default -- there is no stale-object window and no state to thread -- so reach fo
 the functional form when the per-step Python overhead actually shows up in a
 profile.
 
+Other NNX transforms compose inside the jitted function: the merged working copy
+is an ordinary NNX module, so :func:`nnx.vmap` or :func:`nnx.shard_map` wrap it as
+usual. ``examples/gcn_jraphx.py`` and ``examples/gcn_standalone.py`` train exactly
+this way -- an outer :func:`jax.jit` threading the state around an
+:func:`nnx.shard_map` data-parallel step.
+
 Custom Layer JIT Compatibility
 ------------------------------
 

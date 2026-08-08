@@ -178,8 +178,20 @@ def train_step_base(model: SimpleGCN, optimizer: nnx.Optimizer, x, edge_index, y
     return loss
 
 
-def create_train_step(mesh):
-    """Create sharded training step with given mesh."""
+def create_train_step(mesh, model: SimpleGCN, optimizer: nnx.Optimizer):
+    """Create a sharded, jitted training step and its initial state.
+
+    The outer transform is plain :obj:`jax.jit` in the functional style: the model
+    and optimizer are split once into a static graphdef and a state pytree, the
+    jitted step merges them, runs the :obj:`nnx.shard_map`-wrapped step on the
+    working copy, and returns the new state for the caller to thread into the next
+    call. Composing an NNX transform inside :obj:`jax.jit` this way avoids
+    :obj:`nnx.jit`'s per-call Python traversal of the module graph.
+
+    Returns:
+        Tuple of the step function and the initial ``(model, optimizer)`` state.
+        The step signature is ``state, x, edge_index, y -> state, loss``.
+    """
 
     # Define the sharded version using nnx.shard_map
     train_step_sharded = nnx.shard_map(
@@ -195,8 +207,16 @@ def create_train_step(mesh):
         out_specs=P(),  # Loss - reduced and replicated
     )
 
-    # Apply JIT compilation
-    return nnx.jit(train_step_sharded)
+    graphdef, state = nnx.split((model, optimizer))
+
+    @jax.jit
+    def train_step(state, x, edge_index, y):
+        model, optimizer = nnx.merge(graphdef, state)
+        loss = train_step_sharded(model, optimizer, x, edge_index, y)
+        # The updated state is returned, not mutated across the jit boundary
+        return nnx.state((model, optimizer)), loss
+
+    return train_step, state
 
 
 def eval_step_base(model: SimpleGCN, x, edge_index, y):
@@ -220,8 +240,17 @@ def eval_step_base(model: SimpleGCN, x, edge_index, y):
     return loss, accuracy
 
 
-def create_eval_step(mesh):
-    """Create sharded evaluation step with given mesh."""
+def create_eval_step(mesh, model: SimpleGCN):
+    """Create a sharded, jitted evaluation step over a frozen model state.
+
+    Evaluation mutates nothing, so :obj:`jax.jit` only needs the model state as an
+    input. Build this *after* ``model.eval()``: the train/eval flag lives in the
+    static graphdef captured here.
+
+    Returns:
+        Tuple of the step function and the model state. The step signature is
+        ``state, x, edge_index, y -> (loss, accuracy)``.
+    """
 
     # Define the sharded version using nnx.shard_map
     eval_step_sharded = nnx.shard_map(
@@ -239,8 +268,14 @@ def create_eval_step(mesh):
         ),
     )
 
-    # Apply JIT compilation
-    return nnx.jit(eval_step_sharded)
+    graphdef, state = nnx.split(model)
+
+    @jax.jit
+    def eval_step(state, x, edge_index, y):
+        model = nnx.merge(graphdef, state)
+        return eval_step_sharded(model, x, edge_index, y)
+
+    return eval_step, state
 
 
 def main():
@@ -295,15 +330,14 @@ def main():
     mesh = Mesh(devices, axis_names=("dp",))
     print(f"Created mesh with shape: {mesh.shape}")
 
-    # Create sharded training and evaluation functions
-    train_step = create_train_step(mesh)
-    eval_step = create_eval_step(mesh)
-
     # One graph per device, so the sharded graph axis divides evenly
     graphs_per_step = 4 * len(devices)
 
-    # Training loop
+    # Training loop. The step is jax.jit in the functional style: it takes the
+    # (model, optimizer) state and returns the updated state, which the loop
+    # threads into the next call.
     model.train()
+    train_step, train_state = create_train_step(mesh, model, optimizer)
     num_epochs = 100
 
     for epoch in range(num_epochs):
@@ -312,10 +346,14 @@ def main():
         x_stacked, edge_stacked, y_stacked = stack_graphs(graphs)
 
         # Train step over whole graphs
-        loss = train_step(model, optimizer, x_stacked, edge_stacked, y_stacked)
+        train_state, loss = train_step(train_state, x_stacked, edge_stacked, y_stacked)
 
         if epoch % 20 == 0:
             print(f"Epoch {epoch:3d}, Loss: {loss:.4f}")
+
+    # The model and optimizer went stale when their state was split; write the
+    # trained state back before evaluating
+    nnx.update((model, optimizer), train_state)
 
     print("\n4. Evaluation with JraphX")
     print("-" * 30)
@@ -324,9 +362,11 @@ def main():
     test_graphs = [create_synthetic_graph_data(rngs, num_nodes=25) for _ in range(graphs_per_step)]
     test_x, test_edges, test_y = stack_graphs(test_graphs)
 
-    # Evaluate. Evaluation mode is set here, not inside the mapped step.
+    # Evaluate. Evaluation mode is set before the split: the flag is part of the
+    # static graphdef the jitted step captures.
     model.eval()
-    test_loss, test_accuracy = eval_step(model, test_x, test_edges, test_y)
+    eval_step, eval_state = create_eval_step(mesh, model)
+    test_loss, test_accuracy = eval_step(eval_state, test_x, test_edges, test_y)
     print(f"Test loss: {test_loss:.4f}")
     print(f"Test accuracy: {test_accuracy:.2%}")
 
