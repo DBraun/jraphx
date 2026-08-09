@@ -80,10 +80,7 @@ For very deep GNN models, use gradient checkpointing to trade compute for memory
 Vectorized Graph Processing with vmap
 --------------------------------------
 
-Process multiple graphs in parallel using JAX's ``vmap``:
-
-.. code-block:: python
-
+Process multiple graphs in parallel using JAX's ``vmap``.
 ``vmap`` needs every graph to have the same shape, so the graphs have to be padded to a
 common size first. JraphX ships no padding helper; the graphs are stacked explicitly:
 

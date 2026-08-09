@@ -7,7 +7,7 @@ import jraphx
 
 CHANGELOG = Path(__file__).resolve().parents[1] / "docs" / "source" / "changelog.rst"
 
-_VERSION_HEADING = re.compile(r"^Version (\d+\.\d+\.\d+)", re.MULTILINE)
+_VERSION_HEADING = re.compile(r"^\[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}$", re.MULTILINE)
 
 
 def _changelog_versions() -> list[str]:
@@ -29,7 +29,7 @@ def test_version_is_a_release_triple() -> None:
 def test_changelog_documents_the_current_version() -> None:
     """The newest changelog section describes the version the package reports."""
     versions = _changelog_versions()
-    assert versions, f"No 'Version X.Y.Z' headings found in {CHANGELOG}"
+    assert versions, f"No '[X.Y.Z] - YYYY-MM-DD' headings found in {CHANGELOG}"
     assert versions[0] == jraphx.__version__
 
 

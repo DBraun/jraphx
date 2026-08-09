@@ -1,8 +1,8 @@
 Changelog
 =========
 
-Version 0.1.0 (unreleased)
---------------------------
+[0.1.0] - 2026-08-08
+--------------------
 
 This release brings a large number of layers, utilities and data structures in line
 with :obj:`torch_geometric` semantics. Numerical outputs, module state layouts and a
@@ -362,8 +362,8 @@ Trained weights still load (subject to the state-layout notes above), but output
   nonlinearity twice, and a ``JumpingKnowledge`` "bi-directional LSTM" that is
   implemented as two GRU cells.
 
-Version 0.0.4
--------------
+[0.0.4] - 2025-10-30
+--------------------
 
 **Breaking Changes**
 
@@ -371,8 +371,8 @@ Version 0.0.4
 * * Now uses ``nnx.List`` for module lists
 * * Now uses ``nnx.data(None)`` for optional module attributes
 
-Version 0.0.3
--------------
+[0.0.3] - 2025-09-04
+--------------------
 
 Initial release of JraphX.
 
