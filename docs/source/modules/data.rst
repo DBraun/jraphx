@@ -223,7 +223,7 @@ Example: Molecular Graphs
         bond_index: jax.Array | None = None  # Bond connectivity
         bond_type: jax.Array | None = None   # Bond type features
         atom_charge: jax.Array | None = None # Node-level charges
-        mol_weight: float | None = None        # Graph-level property
+        mol_weight: float | None = None      # Graph-level property
 
     @dataclass
     class MolecularBatch(jraphx.Batch):
