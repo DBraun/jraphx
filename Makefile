@@ -1,4 +1,5 @@
-.PHONY: help install install-dev format lint typecheck test check clean docs
+.PHONY: help install install-dev format format-check lint lint-fix typecheck test test-cov \
+	check check-all pre-commit clean docs docs-clean docs-live fmt ci
 
 help:  ## Show this help message
 	@echo "Usage: make [target]"
@@ -17,12 +18,18 @@ format:  ## Format code with black and isort
 	black src/ tests/ --line-length 100
 	isort src/ tests/ --profile black --line-length 100
 
+format-check:  ## Check formatting with black and isort without rewriting files
+	black --check src/ tests/ --line-length 100
+	isort --check-only src/ tests/ --profile black --line-length 100
+
 lint:  ## Run linting with ruff
 	ruff check src/ tests/
 
 lint-fix:  ## Run linting with ruff and fix issues
 	ruff check src/ tests/ --fix
 
+typecheck:  ## Run static type checking with mypy
+	mypy src/
 
 test:  ## Run tests
 	pytest tests/ -v
@@ -30,8 +37,10 @@ test:  ## Run tests
 test-cov:  ## Run tests with coverage
 	pytest tests/ -v --cov=src/jraphx --cov-report=html --cov-report=term
 
-check:  ## Run all checks (lint)
+check:  ## Run lint, formatting and type checks
 	$(MAKE) lint
+	$(MAKE) format-check
+	$(MAKE) typecheck
 
 check-all:  ## Run all checks and tests
 	$(MAKE) check
@@ -54,8 +63,8 @@ clean:  ## Clean up build artifacts and cache files
 	find . -type f -name "*.pyo" -delete
 	find . -type f -name "*~" -delete
 
-docs:  ## Build documentation
-	$(MAKE) -C docs html
+docs:  ## Build documentation with warnings treated as errors
+	$(MAKE) -C docs html SPHINXOPTS="-W --keep-going"
 
 docs-clean:  ## Clean documentation build
 	$(MAKE) -C docs clean

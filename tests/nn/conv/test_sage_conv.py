@@ -6,6 +6,7 @@ from jax import numpy as jnp
 from jax import random
 
 from jraphx.nn.conv import SAGEConv
+from jraphx.utils.scatter import scatter_mean
 
 
 @pytest.mark.parametrize("root_weight", [False, True])
@@ -49,6 +50,37 @@ def test_sage_conv_bipartite():
 
     out1 = conv((x1, x2), edge_index, size=(4, 2))
     assert out1.shape == (2, 32)  # Should have target node count
+
+    # The sizes are implied by the two feature tables, so `size` is optional
+    out2 = conv((x1, x2), edge_index)
+    assert out2.shape == (2, 32)
+    assert jnp.allclose(out1, out2)
+
+
+def test_sage_conv_bipartite_without_target_features():
+    """``(x_src, None)`` aggregates into a target set as large as the source set."""
+    conv = SAGEConv((8, 16), 32, rngs=nnx.Rngs(0))
+    x_src = random.normal(random.key(7), (4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    out = conv((x_src, None), edge_index)
+
+    assert out.shape == (4, 32)
+
+    # Mean aggregation of the transformed source features, without root features
+    expected = scatter_mean(conv.lin(x_src)[edge_index[0]], edge_index[1], 4, dim=0)
+    assert jnp.allclose(out, expected, atol=1e-5)
+
+
+def test_sage_conv_bipartite_without_target_features_explicit_size():
+    """An explicit ``size`` still fixes the target set when ``x_dst`` is None."""
+    conv = SAGEConv((8, 16), 32, rngs=nnx.Rngs(0))
+    x_src = jnp.ones((4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    out = conv((x_src, None), edge_index, size=(4, 2))
+
+    assert out.shape == (2, 32)
 
 
 def test_sage_conv_lazy():
@@ -222,6 +254,45 @@ def test_sage_conv_deterministic():
 
     # Should be deterministic (same output for same input)
     assert jnp.allclose(out1, out2)
+
+
+def test_sage_conv_max_transforms_after_aggregation():
+    """``aggr="max"`` must compute ``W (max_j x_j)``, not ``max_j (W x_j)``.
+
+    An elementwise maximum does not commute with a linear map, so applying the neighbor
+    transform before aggregation would take the maximum in the *output* space and mix
+    columns drawn from different source nodes. Sum and mean are unaffected either way,
+    which is exactly why this needs its own test.
+    """
+    x = jnp.array([[1.0, 0.0], [0.0, 1.0], [-2.0, 3.0]])
+    # Nodes 0 and 1 both point at node 2; node 2 points at node 0.
+    edge_index = jnp.array([[0, 1, 2], [2, 2, 0]])
+
+    conv = SAGEConv(2, 2, aggr="max", root_weight=False, bias=False, rngs=nnx.Rngs(0))
+    weight = conv.lin.kernel[...]
+    out = conv(x, edge_index)
+
+    # Node 2 aggregates over nodes 0 and 1
+    expected = jnp.maximum(x[0], x[1]) @ weight
+    assert jnp.allclose(out[2], expected, atol=1e-6)
+
+    # The pre-aggregation ordering would give a different answer here, so the test can
+    # actually fail if the ordering regresses
+    wrong = jnp.maximum(x[0] @ weight, x[1] @ weight)
+    assert not jnp.allclose(out[2], wrong, atol=1e-6)
+
+
+def test_sage_conv_mean_is_unchanged_by_transform_order():
+    """A linear map commutes with mean aggregation, so both orderings agree."""
+    x = jnp.array([[1.0, 0.0], [0.0, 1.0], [-2.0, 3.0]])
+    edge_index = jnp.array([[0, 1, 2], [2, 2, 0]])
+
+    conv = SAGEConv(2, 2, aggr="mean", root_weight=False, bias=False, rngs=nnx.Rngs(0))
+    weight = conv.lin.kernel[...]
+    out = conv(x, edge_index)
+
+    assert jnp.allclose(out[2], ((x[0] + x[1]) / 2) @ weight, atol=1e-6)
+    assert jnp.allclose(out[2], (x[0] @ weight + x[1] @ weight) / 2, atol=1e-6)
 
 
 # TODO: The following PyG SAGE test features are not implemented in JraphX:

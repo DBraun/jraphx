@@ -118,21 +118,70 @@ def test_jumping_knowledge_modes():
     assert jnp.allclose(max_output, jnp.ones((num_nodes, channels)) * num_layers)
 
 
+def test_lstm_matches_explicit_scan():
+    """LSTM mode runs a real bi-directional recurrence over the layer sequence."""
+    num_nodes, channels, num_layers = 6, 8, 3
+
+    key = nnx.Rngs(0)
+    xs = [
+        jnp.array(nnx.initializers.normal()(key.params(), (num_nodes, channels)))
+        for _ in range(num_layers)
+    ]
+
+    jk = JumpingKnowledge("lstm", num_features=channels, num_layers=num_layers, rngs=nnx.Rngs(0))
+    x = jnp.stack(xs, axis=1)
+
+    # Explicit scan over the module's own cells, with (carry, inputs) ordering
+    hidden = jnp.zeros((num_nodes, jk.rnn_forward.hidden_features))
+    forward = []
+    for t in range(num_layers):
+        hidden, _ = jk.rnn_forward(hidden, x[:, t, :])
+        forward.append(hidden)
+
+    hidden = jnp.zeros((num_nodes, jk.rnn_backward.hidden_features))
+    backward = []
+    for t in range(num_layers - 1, -1, -1):
+        hidden, _ = jk.rnn_backward(hidden, x[:, t, :])
+        backward.append(hidden)
+    backward = backward[::-1]
+
+    bidirectional = jnp.concatenate(
+        [jnp.stack(forward, axis=0), jnp.stack(backward, axis=0)], axis=-1
+    )
+    bidirectional = jnp.transpose(bidirectional, (1, 0, 2))
+    alpha = nnx.softmax(jk.att(bidirectional).squeeze(-1), axis=-1)
+    expected = jnp.sum(x * alpha[..., None], axis=1)
+
+    assert jnp.allclose(jk(xs), expected, atol=1e-6)
+
+    # Swapping carry and inputs is a genuinely different recurrence
+    hidden = jnp.zeros((num_nodes, jk.rnn_forward.hidden_features))
+    swapped = []
+    for t in range(num_layers):
+        _, hidden = jk.rnn_forward(x[:, t, :], hidden)
+        swapped.append(hidden)
+    assert not jnp.allclose(jnp.stack(swapped, axis=0), jnp.stack(forward, axis=0), atol=1e-6)
+
+
 def test_invalid_mode():
     """Test that invalid modes raise appropriate errors."""
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Invalid mode"):
         JumpingKnowledge("invalid_mode")
 
 
 def test_lstm_mode_requirements():
     """Test that LSTM mode requires proper parameters."""
     # Should fail without num_features
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="num_features"):
         JumpingKnowledge("lstm")
 
     # Should fail without num_layers
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="num_layers"):
         JumpingKnowledge("lstm", num_features=10)
+
+    # Should fail without rngs, which mode='lstm' needs to build its GRU cells
+    with pytest.raises(ValueError, match="rngs"):
+        JumpingKnowledge("lstm", num_features=10, num_layers=3)
 
     # Should work with both parameters
     model = JumpingKnowledge("lstm", num_features=10, num_layers=3, rngs=nnx.Rngs(42))

@@ -1,11 +1,14 @@
 """Test cases for JraphX GATConv layer converted from PyTorch Geometric tests."""
 
+import numpy as np
 import pytest
 from flax import nnx
+from jax import nn as jnn
 from jax import numpy as jnp
 from jax import random
 
 from jraphx.nn.conv import GATConv
+from jraphx.utils import scatter_add, scatter_softmax
 
 
 @pytest.mark.parametrize("residual", [False, True])
@@ -249,6 +252,67 @@ def test_gat_conv_residual():
     assert not jnp.allclose(out_res, out_no_res, atol=1e-5)
 
 
+def test_gat_conv_softmax_is_per_head():
+    """Attention coefficients must sum to one per (target node, head), not jointly."""
+    heads = 4
+    x = random.normal(random.key(7), (5, 6))
+    # Nodes 1 and 3 each receive three incoming edges.
+    edge_index = jnp.array([[0, 2, 4, 0, 1, 2], [1, 1, 1, 3, 3, 3]])
+
+    conv = GATConv(6, 3, heads=heads, add_self_loops=False, rngs=nnx.Rngs(0))
+    _, (returned_edge_index, alpha) = conv(x, edge_index, return_attention_weights=True)
+
+    assert alpha.shape == (6, heads)
+    assert jnp.array_equal(returned_edge_index, edge_index)
+
+    target = np.asarray(edge_index[1])
+    for node in [1, 3]:
+        per_head_sum = np.asarray(alpha)[target == node].sum(axis=0)
+        # Each head is normalized independently ...
+        assert np.allclose(per_head_sum, np.ones(heads), atol=1e-5)
+        # ... so the joint sum over all heads is `heads`, not 1.
+        assert np.isclose(per_head_sum.sum(), heads, atol=1e-5)
+
+
+def test_gat_conv_attention_matches_reference():
+    """The layer reproduces the GAT operator with att_src on source, att_dst on target."""
+    heads, out_features = 3, 4
+    x = random.normal(random.key(11), (6, 5))
+    edge_index = jnp.array([[0, 1, 2, 3, 4, 5, 1], [1, 2, 3, 4, 5, 0, 0]])
+
+    conv = GATConv(5, out_features, heads=heads, add_self_loops=False, rngs=nnx.Rngs(3))
+    out, (_, alpha) = conv(x, edge_index, return_attention_weights=True)
+
+    num_nodes = x.shape[0]
+    row, col = edge_index[0], edge_index[1]
+    h = conv.lin(x).reshape(num_nodes, heads, out_features)
+    scores = jnp.sum(h[row] * conv.att_src[...], axis=-1) + jnp.sum(
+        h[col] * conv.att_dst[...], axis=-1
+    )
+    scores = jnn.leaky_relu(scores, negative_slope=conv.negative_slope)
+    expected_alpha = scatter_softmax(scores, col, dim_size=num_nodes)
+    messages = (h[row] * expected_alpha[..., None]).reshape(-1, heads * out_features)
+    expected_out = scatter_add(messages, col, dim_size=num_nodes) + conv.bias[...]
+
+    assert jnp.allclose(alpha, expected_alpha, atol=1e-6)
+    assert jnp.allclose(out, expected_out, atol=1e-5)
+
+
+def test_gat_conv_size_with_dense_input():
+    """A `size` smaller than the node count restricts the number of target nodes."""
+    x = random.normal(random.key(5), (4, 8))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    conv = GATConv(8, 16, heads=2, add_self_loops=False, rngs=nnx.Rngs(0))
+
+    out_full = conv(x, edge_index)
+    assert out_full.shape == (4, 32)
+
+    out_sized = conv(x, edge_index, size=(4, 2))
+    assert out_sized.shape == (2, 32)
+    assert jnp.allclose(out_sized, out_full[:2], atol=1e-6)
+
+
 # TODO: The following PyG GAT test features are not implemented in JraphX:
 # - TorchScript JIT compilation - JAX uses different compilation (jax.jit)
 # - Sparse tensor support (CSC, SparseTensor) - JAX doesn't have direct equivalent
@@ -263,3 +327,87 @@ def test_gat_conv_residual():
 # - Advanced sparse attention weight formats - Simplified in JraphX
 
 # These missing features are documented in docs/source/missing_tests.rst
+
+
+def test_gat_conv_does_not_duplicate_existing_self_loops():
+    """A pre-existing self-loop must not be counted twice in the attention softmax.
+
+    PyG removes self-loops before inserting its own. Adding a second loop for a node
+    that already had one roughly doubles its self-attention mass and correspondingly
+    down-weights its real neighbors, so the output for that node must match what the
+    layer produces on the same graph with the loop stripped out beforehand.
+    """
+    x = jnp.arange(6, dtype=jnp.float32).reshape(3, 2)
+    with_loop = jnp.array([[0, 1, 0], [0, 0, 1]])  # (0, 0) already present
+    without_loop = jnp.array([[1, 0], [0, 1]])  # same graph, loop removed
+
+    conv = GATConv(2, 2, heads=1, rngs=nnx.Rngs(0))
+    assert jnp.allclose(conv(x, with_loop), conv(x, without_loop), atol=1e-6)
+
+
+def test_gat_conv_bipartite_self_loops_use_the_smaller_node_count():
+    """Self-loops only exist for nodes present in both endpoint tables.
+
+    With more target nodes than source nodes, sizing the loop set from the target count
+    appends loops whose source index is out of range for ``x_src``. JAX clamps such a
+    gather to the last row instead of raising, which silently gives several target nodes
+    the same fabricated message and pollutes the softmax of the real ones.
+    """
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    edge_index = jnp.array([[0, 1], [0, 3]])
+
+    conv = GATConv((2, 2), 3, heads=1, bias=False, rngs=nnx.Rngs(0))
+    out = conv((x_src, x_dst), edge_index)
+
+    assert out.shape == (4, 3)
+    assert bool(jnp.isfinite(out).all())
+
+    # Target 2 has no incoming edge and no self-loop of its own, so it must stay empty
+    assert jnp.allclose(out[2], 0.0)
+
+    # Clamping used to make rows 1..3 identical
+    assert not jnp.allclose(out[1], out[2])
+
+
+def test_gat_conv_rejects_out_of_range_source_index():
+    """An index genuinely past the source table must raise, not silently clamp."""
+    x_src = jnp.array([[1.0, 0.0], [0.0, 1.0]])
+    x_dst = jnp.ones((4, 2))
+    conv = GATConv((2, 2), 3, heads=1, rngs=nnx.Rngs(0))
+
+    with pytest.raises(IndexError, match="Source indices"):
+        conv((x_src, x_dst), jnp.array([[0, 7], [0, 3]]))
+
+
+def test_gat_conv_default_negative_slope_is_two_tenths():
+    """The LeakyReLU slope defaults to PyG's 0.2."""
+    conv = GATConv(8, 16, rngs=nnx.Rngs(0))
+    assert conv.negative_slope == 0.2
+
+
+def test_gat_conv_source_only_bipartite_omits_target_term():
+    """With ``x = (x_src, None)`` the attention logit is the source term alone.
+
+    PyG skips ``att_dst`` entirely when no target features exist; gathering
+    the source table at target ids instead fabricates features from unrelated
+    rows and changes every attention weight.
+    """
+    heads, out_features = 2, 3
+    conv = GATConv(
+        (5, 4), out_features, heads=heads, add_self_loops=False, bias=False, rngs=nnx.Rngs(0)
+    )
+    x_src = jnp.asarray(np.random.default_rng(0).normal(size=(4, 5)), dtype=jnp.float32)
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 2]])
+
+    out = conv((x_src, None), edge_index, size=(4, 3))
+
+    x_proj = conv.lin_src(x_src).reshape(-1, heads, out_features)
+    x_j = x_proj[edge_index[0]]
+    alpha = jnp.sum(x_j * conv.att_src[...], axis=-1)
+    alpha = jnn.leaky_relu(alpha, negative_slope=conv.negative_slope)
+    alpha = scatter_softmax(alpha, edge_index[1], dim_size=3)
+    messages = (x_j * alpha[..., None]).reshape(-1, heads * out_features)
+    expected = scatter_add(messages, edge_index[1], dim_size=3)
+
+    assert jnp.allclose(out, expected, atol=1e-6)

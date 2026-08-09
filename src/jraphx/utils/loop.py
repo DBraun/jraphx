@@ -2,22 +2,25 @@
 
 from typing import Union
 
+import jax
 from jax import numpy as jnp
 
 from jraphx.utils.scatter import scatter
 
 
 def add_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     fill_value: Union[float, str] = 1.0,
     num_nodes: int | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+) -> tuple[jax.Array, jax.Array | None]:
     r"""Adds a self-loop :math:`(i,i) \in \mathcal{E}` to every node
     :math:`i \in \mathcal{V}` in the graph given by :attr:`edge_index`.
-    In case the graph is weighted and already contains self-loops, only
-    non-existent self-loops will be added with edge weights denoted by
-    :obj:`fill_value`.
+    In case the graph is weighted or has multi-dimensional edge features
+    (:attr:`edge_attr` is not :obj:`None`), edge features of self-loops will be
+    added according to :obj:`fill_value`. One self-loop is appended per node
+    unconditionally, so a node that already has a self-loop ends up with two;
+    use :func:`add_remaining_self_loops` to add only the missing ones.
 
     Args:
         edge_index (jax.Array): The edge indices.
@@ -26,8 +29,8 @@ def add_self_loops(
         fill_value (float or str, optional): The way to generate edge features of
             self-loops. If float, edge features are set to this value.
             If str, edge features are computed by aggregating existing edge features
-            that point to each node using the specified reduction ('mean', 'add', 'max', 'min').
-            (default: :obj:`1.0`)
+            that point to each node using the specified reduction ('mean', 'add'
+            (alias 'sum'), 'max', 'min'). (default: :obj:`1.0`)
         num_nodes (int, optional): The number of nodes, *i.e.*
             :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
 
@@ -35,14 +38,14 @@ def add_self_loops(
         Tuple of (edge_index with self-loops, edge_attr with self-loops).
 
     .. note::
-        For JIT compatibility, :obj:`num_nodes` should be provided as a static
-        integer when possible.
+        The output shape depends on :obj:`num_nodes`, so it must be given as a
+        static integer under :obj:`jax.jit`. Inferring it from
+        :attr:`edge_index` reads the array on the host.
     """
-    # JIT-compatible: Use shape directly when num_nodes not provided
     if num_nodes is None:
         if edge_index.size == 0:
             return edge_index, edge_attr
-        num_nodes = edge_index.max() + 1
+        num_nodes = int(edge_index.max()) + 1
 
     # Handle edge attributes first (before modifying edge_index)
     if edge_attr is not None:
@@ -64,8 +67,7 @@ def add_self_loops(
                 )
         edge_attr = jnp.concatenate([edge_attr, loop_attr], axis=0)
 
-    # Create self-loop edges - using dynamic shape-dependent arange
-    # This works in JIT because num_nodes is now a traced value
+    # One self-loop per node
     loop_index = jnp.arange(num_nodes)
     loop_index = jnp.stack([loop_index, loop_index], axis=0)
 
@@ -76,9 +78,9 @@ def add_self_loops(
 
 
 def remove_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
+) -> tuple[jax.Array, jax.Array | None]:
     """Remove self-loops from edge indices.
 
     Args:
@@ -102,14 +104,18 @@ def remove_self_loops(
 
 
 def add_remaining_self_loops(
-    edge_index: jnp.ndarray,
-    edge_attr: jnp.ndarray | None = None,
+    edge_index: jax.Array,
+    edge_attr: jax.Array | None = None,
     fill_value: float = 1.0,
     num_nodes: int | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray | None]:
-    """Add self-loops only for nodes that don't already have them.
+) -> tuple[jax.Array, jax.Array | None]:
+    """Add self-loops so that every node carries exactly one.
 
-    Optimized version using boolean masking instead of setdiff1d.
+    The self-loops the input already had are removed first, so a duplicated
+    loop collapses to a single one. Every node's loop is appended at the end of
+    the edge list in node order. A node that already had a loop keeps that
+    loop's attribute (the last occurrence, if it had several); loops created
+    for the remaining nodes take :obj:`fill_value`.
 
     Args:
         edge_index: Edge indices [2, num_edges]
@@ -119,45 +125,35 @@ def add_remaining_self_loops(
 
     Returns:
         Tuple of (edge_index with self-loops, edge_attr with self-loops)
+
+    .. note::
+        The number of self-loops removed from the input is data-dependent, so
+        this function cannot be traced by :obj:`jax.jit`.
     """
-    # JIT-compatible: Use shape directly when num_nodes not provided
     if num_nodes is None:
         if edge_index.size == 0:
             return edge_index, edge_attr
-        num_nodes = edge_index.max() + 1
+        num_nodes = int(edge_index.max()) + 1
 
-    # Find existing self-loops
+    # Drop every existing self-loop; the per-node loops appended below replace
+    # them, so a duplicated loop collapses to one
     row, col = edge_index[0], edge_index[1]
-    is_self_loop = row == col
+    keep = row != col
 
-    # Create a boolean mask for nodes that have self-loops
-    # More efficient than using unique and setdiff1d
-    has_self_loop = jnp.zeros(num_nodes, dtype=jnp.bool_)
-    has_self_loop = has_self_loop.at[row[is_self_loop]].set(True)
+    loop_index = jnp.arange(num_nodes, dtype=edge_index.dtype)
+    edge_index = jnp.concatenate(
+        [edge_index[:, keep], jnp.stack([loop_index, loop_index], axis=0)], axis=1
+    )
 
-    # Find nodes without self-loops using boolean indexing
-    nodes_without_loops = jnp.where(~has_self_loop)[0]
-
-    # Create self-loops for nodes without them
-    num_new_loops = nodes_without_loops.size
-    if num_new_loops > 0:
-        loop_index = jnp.stack([nodes_without_loops, nodes_without_loops], axis=0)
-        edge_index = jnp.concatenate([edge_index, loop_index], axis=1)
-
-        # Handle edge attributes
-        if edge_attr is not None:
-            if edge_attr.ndim == 1:
-                loop_attr = jnp.full(
-                    num_new_loops,
-                    fill_value,
-                    dtype=edge_attr.dtype,
-                )
-            else:
-                loop_attr = jnp.full(
-                    (num_new_loops,) + edge_attr.shape[1:],
-                    fill_value,
-                    dtype=edge_attr.dtype,
-                )
-            edge_attr = jnp.concatenate([edge_attr, loop_attr], axis=0)
+    if edge_attr is not None:
+        loop_attr = jnp.full(
+            (num_nodes,) + edge_attr.shape[1:],
+            fill_value,
+            dtype=edge_attr.dtype,
+        )
+        # A node that already had a loop keeps its attribute; with several,
+        # the last occurrence wins
+        loop_attr = loop_attr.at[row[~keep]].set(edge_attr[~keep])
+        edge_attr = jnp.concatenate([edge_attr[keep], loop_attr], axis=0)
 
     return edge_index, edge_attr

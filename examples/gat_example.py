@@ -238,18 +238,24 @@ def demo_residual_connections():
     # Deep GAT with optional normalization
     class DeepGAT(nnx.Module):
         def __init__(self, use_residual=False, use_norm=False, rngs=None):
-            self.layers = [
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-                GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
-            ]
+            # nnx.List makes the submodules part of the pytree; a plain list
+            # would be treated as a static attribute and rejected.
+            self.layers = nnx.List(
+                [
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                    GATConv(16, 16, heads=1, concat=False, residual=use_residual, rngs=rngs),
+                ]
+            )
             self.use_norm = use_norm
             if use_norm:
-                self.norms = [
-                    LayerNorm(16),
-                    LayerNorm(16),
-                    LayerNorm(16),
-                ]
+                self.norms = nnx.List(
+                    [
+                        LayerNorm(16),
+                        LayerNorm(16),
+                        LayerNorm(16),
+                    ]
+                )
 
         def __call__(self, x, edge_index):
             for i, layer in enumerate(self.layers):
@@ -282,23 +288,23 @@ def demo_residual_connections():
         out = model(x, edge_index)
         return jnp.mean(out**2)
 
-    # Compute gradients
-    graphdef_no_res, state_no_res = nnx.split(model_no_res)
-    graphdef_with_res, state_with_res = nnx.split(model_with_res)
-    graphdef_with_norm, state_with_norm = nnx.split(model_with_norm)
+    # Compute gradients. Split the parameters away from the rest of the state:
+    # a module also carries non-differentiable state such as dropout RNG counters,
+    # which are integers and cannot be differentiated.
+    def compute_grad_norm(model):
+        graphdef, params, rest = nnx.split(model, nnx.Param, ...)
 
-    def compute_grad_norm(graphdef, state):
-        def stateful_loss(state):
-            model = nnx.merge(graphdef, state)
-            return loss_fn(model, data.x, data.edge_index)
+        def stateful_loss(params):
+            merged = nnx.merge(graphdef, params, rest)
+            return loss_fn(merged, data.x, data.edge_index)
 
-        _, grads = jax.value_and_grad(stateful_loss)(state)
+        _, grads = jax.value_and_grad(stateful_loss)(params)
         grad_norm = jax.tree.map(lambda g: jnp.linalg.norm(g), grads)
         return jax.tree.reduce(lambda x, y: x + y, grad_norm)
 
-    grad_norm_no_res = compute_grad_norm(graphdef_no_res, state_no_res)
-    grad_norm_with_res = compute_grad_norm(graphdef_with_res, state_with_res)
-    grad_norm_with_norm = compute_grad_norm(graphdef_with_norm, state_with_norm)
+    grad_norm_no_res = compute_grad_norm(model_no_res)
+    grad_norm_with_res = compute_grad_norm(model_with_res)
+    grad_norm_with_norm = compute_grad_norm(model_with_norm)
 
     print(f"\nGradient norm without residual: {grad_norm_no_res:.6f}")
     print(f"Gradient norm with residual: {grad_norm_with_res:.6f}")

@@ -3,10 +3,23 @@
 Converted from PyTorch Geometric test_glob.py to test JraphX functionality.
 """
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
-from jraphx.nn.pool.glob import global_add_pool, global_max_pool, global_mean_pool
+from jraphx.nn.pool.glob import (
+    batch_histogram,
+    batched_global_add_pool,
+    batched_global_max_pool,
+    batched_global_mean_pool,
+    global_add_pool,
+    global_max_pool,
+    global_mean_pool,
+    global_min_pool,
+    global_softmax_pool,
+    global_sort_pool,
+)
 
 
 def test_global_pool():
@@ -240,14 +253,50 @@ def test_different_graph_sizes():
 # TODO: Additional pooling functions available in JraphX but not in PyG:
 # - global_min_pool
 # - global_softmax_pool
-# - global_sort_pool
 # - batch_histogram
+# (global_sort_pool exists in PyG too, as SortAggregation; see
+# test_global_sort_pool_* for the parity tests.)
+
+
+def test_global_sort_pool_sorts_by_last_channel():
+    """Nodes are ranked by the last feature channel, not by their feature sum.
+
+    Node 0 has the largest sum (11) but the smallest last channel (1), so PyG's
+    SortAggregation ranks it last; a sum-based sort would rank it first.
+    """
+    x = jnp.array([[10.0, 1.0], [0.0, 3.0], [5.0, 2.0]])
+
+    out = global_sort_pool(x, None, k=2)
+    assert out.shape == (1, 4)
+    assert jnp.allclose(out[0], jnp.array([0.0, 3.0, 5.0, 2.0]))
+
+
+def test_global_sort_pool_padding_never_displaces_real_nodes():
+    """Zero-padding is appended after selection, so it cannot outrank a node.
+
+    Both nodes sort ahead of the padding even though their sort scores are
+    negative; pre-fix, the padding's score of 0 won the sort and pushed the
+    real features to the back of the row.
+    """
+    x = jnp.array([[-1.0, -5.0], [-2.0, -3.0]])
+
+    out = global_sort_pool(x, None, k=3)
+    assert jnp.allclose(out[0], jnp.array([-2.0, -3.0, -1.0, -5.0, 0.0, 0.0]))
+
+
+def test_global_sort_pool_batched_matches_single_graph():
+    """The batched path applies the same per-graph sort-then-pad rule."""
+    x = jnp.array([[10.0, 1.0], [0.0, 3.0], [5.0, 2.0], [-1.0, -5.0], [-2.0, -3.0]])
+    batch = jnp.array([0, 0, 0, 1, 1])
+
+    out = global_sort_pool(x, batch, k=3, size=2)
+    assert out.shape == (2, 6)
+    assert jnp.allclose(out[0], jnp.array([0.0, 3.0, 5.0, 2.0, 10.0, 1.0]))
+    assert jnp.allclose(out[1], jnp.array([-2.0, -3.0, -1.0, -5.0, 0.0, 0.0]))
 
 
 def test_jraphx_extensions():
     """Test JraphX-specific pooling extensions."""
-    from jraphx.nn.pool.glob import global_min_pool, global_softmax_pool
-
     x = jnp.array([[1.0, 5.0], [3.0, 2.0], [2.0, 4.0]])
 
     # Test min pooling
@@ -261,9 +310,178 @@ def test_jraphx_extensions():
     # Should be a weighted average, exact values depend on softmax weights
 
 
+def test_empty_graphs_pool_to_zero():
+    """Graphs without nodes pool to zeros instead of +/- infinity."""
+    x = jnp.array([[1.0, 5.0], [3.0, 2.0], [2.0, 4.0]])
+    batch = jnp.array([0, 0, 2])
+
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert jnp.all(jnp.isfinite(out_max))
+    assert jnp.all(jnp.isfinite(out_min))
+    assert jnp.allclose(out_max[1], jnp.zeros(2))
+    assert jnp.allclose(out_min[1], jnp.zeros(2))
+    assert jnp.allclose(out_max[0], jnp.array([3.0, 5.0]))
+    assert jnp.allclose(out_min[0], jnp.array([1.0, 2.0]))
+
+
+def test_pooling_keeps_rank_for_1d_node_features():
+    """A scalar feature per node pools to one scalar per graph, not to a matrix."""
+    x = jnp.array([5.0, 3.0, 1.0, 2.0])
+    batch = jnp.array([0, 0, 2, 2])
+
+    out_add = global_add_pool(x, batch, size=3)
+    out_mean = global_mean_pool(x, batch, size=3)
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert out_add.shape == (3,)
+    assert out_mean.shape == (3,)
+    assert out_max.shape == (3,)
+    assert out_min.shape == (3,)
+
+    assert jnp.allclose(out_add, jnp.array([8.0, 0.0, 3.0]))
+    assert jnp.allclose(out_mean, jnp.array([4.0, 0.0, 1.5]))
+    assert jnp.allclose(out_max, jnp.array([5.0, 0.0, 2.0]))
+    assert jnp.allclose(out_min, jnp.array([3.0, 0.0, 1.0]))
+
+
+def test_pooling_supports_extra_feature_axes():
+    """Node features with several feature axes keep their trailing shape when pooled."""
+    x = jnp.arange(24, dtype=jnp.float32).reshape(4, 2, 3)
+    batch = jnp.array([0, 0, 2, 2])
+    zeros = jnp.zeros((2, 3))
+
+    out_mean = global_mean_pool(x, batch, size=3)
+    out_max = global_max_pool(x, batch, size=3)
+    out_min = global_min_pool(x, batch, size=3)
+
+    assert out_mean.shape == (3, 2, 3)
+    assert out_max.shape == (3, 2, 3)
+    assert out_min.shape == (3, 2, 3)
+
+    assert jnp.allclose(out_mean[0], x[:2].mean(axis=0))
+    assert jnp.allclose(out_max[0], x[:2].max(axis=0))
+    assert jnp.allclose(out_min[2], x[2:].min(axis=0))
+
+    # The empty graph pools to zeros rather than to the reduction identity.
+    assert jnp.allclose(out_mean[1], zeros)
+    assert jnp.allclose(out_max[1], zeros)
+    assert jnp.allclose(out_min[1], zeros)
+
+
+def test_infinite_inputs_are_preserved():
+    """Non-empty graphs keep genuinely infinite node features."""
+    x = jnp.array([[jnp.inf, 1.0], [2.0, -jnp.inf]])
+    batch = jnp.array([0, 0])
+
+    assert jnp.isinf(global_max_pool(x, batch)[0, 0])
+    assert jnp.isinf(global_min_pool(x, batch)[0, 1])
+
+
+def test_global_softmax_pool_single_graph_weights_nodes():
+    """Softmax pooling over a single graph normalizes across nodes, not features."""
+    x = jnp.array([[1.0, 0.0], [0.0, 3.0], [2.0, 2.0]])
+
+    out = global_softmax_pool(x, None)
+
+    weights = jax.nn.softmax(x.sum(axis=-1), axis=0).reshape(-1, 1)
+    expected = (x * weights).sum(axis=0, keepdims=True)
+    assert jnp.allclose(out, expected)
+    # A degenerate softmax would collapse to a plain sum over nodes.
+    assert not jnp.allclose(out, x.sum(axis=0, keepdims=True))
+
+
+def test_global_softmax_pool_matches_single_graph_batch():
+    """A batch vector with one graph reproduces the batch=None result."""
+    x = jnp.array([[1.0, 0.0], [0.0, 3.0], [2.0, 2.0]])
+    batch = jnp.zeros(3, dtype=jnp.int32)
+
+    assert jnp.allclose(global_softmax_pool(x, None), global_softmax_pool(x, batch))
+
+
+def test_pooling_under_jit_requires_size():
+    """Without `size`, the number of graphs cannot be inferred from a traced batch."""
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    batch = jnp.array([0, 0, 1])
+
+    with pytest.raises(ValueError, match="Pass `size="):
+        jax.jit(global_add_pool)(x, batch)
+
+    out = jax.jit(lambda x, batch: global_add_pool(x, batch, 2))(x, batch)
+    assert jnp.allclose(out, jnp.array([[4.0, 6.0], [5.0, 6.0]]))
+
+
+def test_batched_pooling_with_size():
+    """The vmapped wrappers work when the number of graphs is given."""
+    x = jnp.arange(24, dtype=jnp.float32).reshape(2, 4, 3)
+    batch = jnp.array([[0, 0, 1, 1], [0, 1, 1, 1]])
+
+    out_add = batched_global_add_pool(x, batch, 2)
+    out_mean = batched_global_mean_pool(x, batch, 2)
+    out_max = batched_global_max_pool(x, batch, 2)
+
+    assert out_add.shape == (2, 2, 3)
+    assert jnp.allclose(out_add[0, 0], x[0, :2].sum(axis=0))
+    assert jnp.allclose(out_mean[1, 1], x[1, 1:].mean(axis=0))
+    assert jnp.allclose(out_max[0, 1], x[0, 2:].max(axis=0))
+
+
+def test_batch_histogram_bins_match_numpy():
+    """Each value must land in the bin whose interval contains it.
+
+    Searching only the left edges from the left returns the first edge at or above the
+    value, which pushes everything strictly inside a bin one place to the right and
+    leaves bin 0 collecting only values exactly equal to the lower bound.
+    """
+    x = jnp.array([[0.1], [0.4], [0.6], [0.9]])
+    hist = batch_histogram(x, None, bins=4, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0, 1.0, 1.0]))
+
+    # Agreement with numpy.histogram over a less tidy sample
+    values = np.random.default_rng(0).normal(size=200).astype(np.float32)
+    mine = np.asarray(
+        batch_histogram(jnp.asarray(values).reshape(-1, 1), None, bins=7, min_val=-3.0, max_val=3.0)
+    )[0]
+    reference = np.histogram(values, bins=7, range=(-3.0, 3.0))[0]
+    assert np.array_equal(mine.astype(int), reference)
+
+
+def test_batch_histogram_closes_the_last_bin_on_the_right():
+    """A value equal to the upper bound belongs to the last bin, as in numpy."""
+    x = jnp.array([[0.0], [1.0]])
+    hist = batch_histogram(x, None, bins=2, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0]))
+
+
+def test_batch_histogram_per_graph_rows():
+    """With a batch vector, each graph gets its own row of counts."""
+    x = jnp.array([[0.1], [0.9], [0.1], [0.1]])
+    batch = jnp.array([0, 0, 1, 1])
+    hist = batch_histogram(x, batch, bins=2, min_val=0.0, max_val=1.0)
+    assert jnp.allclose(hist[0], jnp.array([1.0, 1.0]))
+    assert jnp.allclose(hist[1], jnp.array([2.0, 0.0]))
+
+
 if __name__ == "__main__":
     # Run basic tests
     test_global_pool()
     test_permuted_global_pool()
     test_dense_global_pool()
     print("Global pooling tests passed!")
+
+
+def test_batch_histogram_drops_out_of_range_values():
+    """With an explicit range, values outside it are not counted.
+
+    ``numpy.histogram`` drops them; folding them into the edge bins inflated
+    the first and last counts.
+    """
+    x = jnp.array([[-5.0], [-0.5], [0.5], [5.0]])
+
+    hist = batch_histogram(x, bins=2, min_val=-1.0, max_val=1.0)
+
+    ref, _ = np.histogram(np.asarray(x)[:, 0], bins=2, range=(-1.0, 1.0))
+    assert jnp.allclose(hist[0], jnp.asarray(ref, dtype=jnp.float32))
+    assert float(hist.sum()) == 2.0

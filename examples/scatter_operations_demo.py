@@ -50,7 +50,9 @@ def demo_basic_scatter():
     logging.info(f"  Mean: {mean_result}")  # [1.5, 4.0]
     logging.info(f"  Max:  {max_result}")  # [2, 5]
     logging.info(f"  Min:  {min_result}")  # [1, 3]
-    logging.info(f"  Std:  {std_result}")  # [0.5, 0.816...]
+    # scatter_std applies Bessel's correction by default; pass unbiased=False for the
+    # population standard deviation ([0.5, 0.8165] for these groups).
+    logging.info(f"  Std:  {std_result}")  # [0.7071, 1.0]
 
 
 def demo_attention_softmax():

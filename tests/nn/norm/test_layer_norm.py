@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import jax.random as random
 import pytest
@@ -60,28 +61,155 @@ def test_layer_norm_node_mode():
 
 
 def test_layer_norm_graph_mode():
-    """Test LayerNorm in graph mode specifically."""
+    """Graph mode reduces over both the node axis and the feature axis."""
     key = random.PRNGKey(42)
-    x = random.normal(key, (200, 16))
+    x = random.normal(key, (200, 16)) * jnp.arange(1, 17) + jnp.arange(16)
     # Create 4 graphs with 50 nodes each
     batch = jnp.repeat(jnp.arange(4), 50)
 
     norm = LayerNorm(16, mode="graph", rngs=nnx.Rngs(42))
     out = norm(x, batch)
 
-    # In graph mode, each graph should be normalized as a unit
-    # For each graph, nodes should have consistent normalization
+    # The whole (nodes x features) block of each graph is one normalized unit
     for b in range(4):
-        mask = batch == b
-        graph_out = out[mask]
+        graph_out = out[batch == b]
+        assert jnp.allclose(graph_out.mean(), 0.0, atol=1e-5)
+        assert jnp.allclose(graph_out.std(), 1.0, atol=1e-4)
 
-        # Each node in the graph should have the same mean and std pattern
-        node_means = graph_out.mean(axis=1)
-        node_stds = graph_out.std(axis=1)
+    # Individual nodes are NOT separately normalized in graph mode
+    node_means = out.mean(axis=1)
+    assert not jnp.allclose(node_means, jnp.zeros_like(node_means), atol=1e-3)
 
-        # All nodes in the same graph should have similar statistics
-        assert jnp.allclose(node_means, jnp.zeros_like(node_means), atol=1e-6)
-        assert jnp.allclose(node_stds, jnp.ones_like(node_stds), atol=1e-4)
+
+def test_layer_norm_graph_mode_differs_from_node_mode():
+    """Graph mode and node mode must not produce identical output."""
+    x = jnp.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0]])
+    batch = jnp.array([0, 0, 1, 1], dtype=jnp.int32)
+
+    node_out = LayerNorm(2, mode="node", rngs=nnx.Rngs(42))(x, batch)
+    graph_out = LayerNorm(2, mode="graph", rngs=nnx.Rngs(42))(x, batch)
+
+    assert not jnp.allclose(node_out, graph_out)
+
+    # Node mode: every row is normalized on its own two values -> [-1, +1]
+    assert jnp.allclose(node_out, jnp.tile(jnp.array([-1.0, 1.0]), (4, 1)), atol=1e-4)
+
+    # Graph mode: one scalar mean/std per graph over the 2x2 block
+    block = x[:2]
+    expected = (block - block.mean()) / jnp.sqrt(block.var() + 1e-5)
+    assert jnp.allclose(graph_out[:2], expected, atol=1e-4)
+
+
+def test_layer_norm_graph_mode_no_batch():
+    """Graph mode without a batch vector reduces over every node and every feature."""
+    x = jnp.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0]])
+
+    norm = LayerNorm(2, mode="graph", rngs=nnx.Rngs(0))
+    out_no_batch = norm(x)
+
+    # A single scalar mean/variance taken over the whole 4x2 block.
+    expected = (x - x.mean()) / jnp.sqrt(x.var() + 1e-5)
+    assert jnp.allclose(out_no_batch, expected, atol=1e-4)
+
+    # The implicit single-graph assignment matches an explicit all-zero batch vector.
+    assert jnp.allclose(out_no_batch, norm(x, jnp.zeros(4, dtype=jnp.int32)), atol=1e-6)
+
+    # Node-wise statistics would send every row to [-1, +1]; graph mode must not.
+    node_out = LayerNorm(2, mode="node", rngs=nnx.Rngs(0))(x)
+    assert jnp.allclose(node_out, jnp.tile(jnp.array([-1.0, 1.0]), (4, 1)), atol=1e-4)
+    assert not jnp.allclose(out_no_batch, node_out, atol=1e-3)
+
+
+@pytest.mark.parametrize("use_bias,use_scale", [(False, True), (True, False), (False, False)])
+def test_layer_norm_graph_mode_partial_affine(use_bias, use_scale):
+    """Graph mode must not dereference the affine parameters that were not created."""
+    key = random.PRNGKey(3)
+    x = random.normal(key, (10, 4))
+    batch = jnp.array([0] * 6 + [1] * 4, dtype=jnp.int32)
+
+    norm = LayerNorm(4, mode="graph", use_bias=use_bias, use_scale=use_scale, rngs=nnx.Rngs(0))
+    assert (norm.weight is not None) == use_scale
+    assert (norm.bias is not None) == use_bias
+
+    out = norm(x, batch)
+    assert out.shape == (10, 4)
+    assert bool(jnp.all(jnp.isfinite(out)))
+
+
+def test_layer_norm_graph_mode_dtype():
+    """Graph mode honors the ``dtype`` argument, like node mode."""
+    key = random.PRNGKey(11)
+    x = random.normal(key, (8, 4))
+    batch = jnp.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32)
+
+    norm = LayerNorm(4, mode="graph", dtype=jnp.bfloat16, rngs=nnx.Rngs(0))
+    out = norm(x, batch)
+    assert out.dtype == jnp.bfloat16
+
+
+def test_layer_norm_graph_mode_empty_graph():
+    """An empty segment must not produce NaNs in the other graphs."""
+    key = random.PRNGKey(5)
+    x = random.normal(key, (8, 4))
+    batch = jnp.array([0, 0, 0, 0, 2, 2, 2, 2], dtype=jnp.int32)
+
+    norm = LayerNorm(4, mode="graph", rngs=nnx.Rngs(0))
+    out = norm(x, batch, batch_size=3)
+
+    assert bool(jnp.all(jnp.isfinite(out)))
+    for b in [0, 2]:
+        graph_out = out[batch == b]
+        assert jnp.allclose(graph_out.mean(), 0.0, atol=1e-5)
+        assert jnp.allclose(graph_out.std(), 1.0, atol=1e-4)
+
+
+def test_layer_norm_graph_mode_ignores_mask():
+    """Graph mode reduces over every node of a graph, whatever ``mask`` selects."""
+    x = jnp.array(
+        [[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0], [5.0, 500.0], [6.0, 600.0]]
+    )
+    batch = jnp.array([0, 0, 0, 1, 1, 1], dtype=jnp.int32)
+    partial_mask = jnp.array([True, False, True, False, True, True])
+
+    norm = LayerNorm(2, mode="graph", rngs=nnx.Rngs(0))
+    out = norm(x, batch, mask=partial_mask)
+
+    # Statistics come from the full 3x2 block of each graph, not from the masked-in rows.
+    for lo, hi in [(0, 3), (3, 6)]:
+        block = x[lo:hi]
+        expected = (block - block.mean()) / jnp.sqrt(block.var() + 1e-5)
+        assert jnp.allclose(out[lo:hi], expected, atol=1e-4)
+
+        masked_block = block[partial_mask[lo:hi]]
+        masked_expected = (block - masked_block.mean()) / jnp.sqrt(masked_block.var() + 1e-5)
+        assert not jnp.allclose(out[lo:hi], masked_expected, atol=1e-3)
+
+    assert jnp.allclose(out, norm(x, batch), atol=1e-6)
+
+
+def test_layer_norm_graph_mode_jit():
+    """Graph mode traces under ``nnx.jit`` when ``batch_size`` is static."""
+    key = random.PRNGKey(17)
+    x = random.normal(key, (6, 4))
+    batch = jnp.array([0, 0, 0, 1, 1, 1], dtype=jnp.int32)
+
+    norm = LayerNorm(4, mode="graph", rngs=nnx.Rngs(0))
+
+    @nnx.jit
+    def run(module: LayerNorm, features: jax.Array, batch_vector: jax.Array) -> jax.Array:
+        return module(features, batch_vector, batch_size=2)
+
+    assert jnp.allclose(run(norm, x, batch), norm(x, batch), atol=1e-5)
+
+
+def test_layer_norm_unknown_mode():
+    """An unrecognized mode is reported instead of silently falling back."""
+    key = random.PRNGKey(19)
+    x = random.normal(key, (4, 4))
+
+    norm = LayerNorm(4, mode="element", rngs=nnx.Rngs(0))
+    with pytest.raises(ValueError, match="Unknown LayerNorm mode"):
+        norm(x)
 
 
 def test_layer_norm_no_affine():
@@ -114,8 +242,8 @@ def test_layer_norm_with_affine():
     assert norm.bias is not None
 
     # Initial weight should be ones, bias should be zeros
-    assert jnp.allclose(norm.weight.value, jnp.ones(16))
-    assert jnp.allclose(norm.bias.value, jnp.zeros(16))
+    assert jnp.allclose(norm.weight[...], jnp.ones(16))
+    assert jnp.allclose(norm.bias[...], jnp.zeros(16))
 
     out = norm(x)
     assert out.shape == (100, 16)
@@ -148,6 +276,16 @@ if __name__ == "__main__":
 
     test_layer_norm_node_mode()
     test_layer_norm_graph_mode()
+    test_layer_norm_graph_mode_differs_from_node_mode()
+    test_layer_norm_graph_mode_no_batch()
+    test_layer_norm_graph_mode_partial_affine(False, True)
+    test_layer_norm_graph_mode_partial_affine(True, False)
+    test_layer_norm_graph_mode_partial_affine(False, False)
+    test_layer_norm_graph_mode_dtype()
+    test_layer_norm_graph_mode_empty_graph()
+    test_layer_norm_graph_mode_ignores_mask()
+    test_layer_norm_graph_mode_jit()
+    test_layer_norm_unknown_mode()
     test_layer_norm_no_affine()
     test_layer_norm_with_affine()
     test_layer_norm_multi_dimensional()

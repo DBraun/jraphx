@@ -11,9 +11,9 @@ This cheatsheet provides an overview of all available Graph Neural Network layer
 
 * **bipartite**: If checked (✓), supports message passing in bipartite graphs with potentially different feature dimensionalities for source and destination nodes.
 
-* **JIT-ready**: If checked (✓), the layer is fully compatible with :obj:`@jax.jit` compilation for optimal performance.
+* **JIT-ready**: If checked (✓), the layer is compatible with :obj:`@jax.jit` compilation for optimal performance. A parenthetical condition means the layer is only traceable when that condition holds.
 
-* **vmap-ready**: If checked (✓), the layer can be efficiently vectorized over multiple graphs using :obj:`nnx.vmap`.
+* **vmap-ready**: If checked (✓), the layer can be efficiently vectorized over multiple graphs using :obj:`nnx.vmap`, under the same condition as the JIT-ready column.
 
 Graph Neural Network Operators
 ------------------------------
@@ -32,36 +32,42 @@ Graph Neural Network Operators
       - ✓
       -
       -
-      - ✓
-      - ✓
+      - ✓ (``cached=False``, or after ``precompute_norm()``)
+      - ✓ (same condition)
     * - :class:`~jraphx.nn.conv.GATConv` (`Paper <https://arxiv.org/abs/1710.10903>`__)
       -
       - ✓
-      -
+      - ✓
       - ✓
       - ✓
     * - :class:`~jraphx.nn.conv.GATv2Conv` (`Paper <https://arxiv.org/abs/2105.14491>`__)
       -
       - ✓
-      -
+      - ✓
       - ✓
       - ✓
     * - :class:`~jraphx.nn.conv.SAGEConv` (`Paper <https://arxiv.org/abs/1706.02216>`__)
       -
       -
-      -
+      - ✓
       - ✓
       - ✓
     * - :class:`~jraphx.nn.conv.GINConv` (`Paper <https://arxiv.org/abs/1810.00826>`__)
       -
       -
+      - ✓
+      - ✓
+      - ✓
+    * - :class:`~jraphx.nn.conv.GINEConv` (`Paper <https://arxiv.org/abs/1905.12265>`__)
       -
+      - ✓
+      - ✓
       - ✓
       - ✓
     * - :class:`~jraphx.nn.conv.EdgeConv` (`Paper <https://arxiv.org/abs/1801.07829>`__)
       -
       -
-      -
+      - ✓
       - ✓
       - ✓
     * - :class:`~jraphx.nn.conv.TransformerConv` (`Paper <https://arxiv.org/abs/2012.09699>`__)
@@ -116,11 +122,11 @@ Normalization Layers
       - ✓
       - ✓
     * - :class:`~jraphx.nn.norm.LayerNorm`
-      - ✓
-      - ✓
+      - ✓ (``mode="graph"`` requires ``batch_size=``)
+      - ✓ (same condition)
     * - :class:`~jraphx.nn.norm.GraphNorm`
-      - ✓
-      - ✓
+      - ✓ (requires ``batch_size=``)
+      - ✓ (same condition)
 
 Pooling Operations
 ------------------
@@ -133,20 +139,28 @@ Pooling Operations
       - JIT-ready
       - vmap-ready
     * - :func:`~jraphx.nn.pool.global_add_pool`
-      - ✓
-      - ✓
+      - ✓ (requires ``size=``)
+      - ✓ (same condition)
     * - :func:`~jraphx.nn.pool.global_mean_pool`
-      - ✓
-      - ✓
+      - ✓ (requires ``size=``)
+      - ✓ (same condition)
     * - :func:`~jraphx.nn.pool.global_max_pool`
-      - ✓
-      - ✓
+      - ✓ (requires ``size=``)
+      - ✓ (same condition)
+    * - :func:`~jraphx.nn.pool.global_min_pool`
+      - ✓ (requires ``size=``)
+      - ✓ (same condition)
     * - :class:`~jraphx.nn.pool.TopKPooling`
-      - ✓
-      - ✓
+      -
+      -
     * - :class:`~jraphx.nn.pool.SAGPooling`
-      - ✓
-      - ✓
+      -
+      -
+
+The global pooling functions raise a :obj:`ValueError` when ``batch`` is traced and
+``size`` is omitted, since the number of graphs must be a static Python integer.
+``TopKPooling`` and ``SAGPooling`` select a data-dependent number of nodes and therefore
+cannot be traced at all.
 
 Quick Usage Examples
 --------------------
@@ -191,7 +205,7 @@ Quick Usage Examples
         hidden_features=64,
         out_features=7,
         num_layers=3,
-        dropout=0.1,
+        dropout_rate=0.1,
         rngs=nnx.Rngs(42)
     )
 
@@ -221,7 +235,7 @@ JAX-Specific Optimizations
 
 **JraphX** layers are designed to take full advantage of JAX's capabilities:
 
-* **JIT Compilation**: All layers support :obj:`@jax.jit` for optimal performance
+* **JIT Compilation**: Convolution layers support :obj:`@jax.jit` for optimal performance; see the tables above for the layers that need a static size argument or cannot be traced
 * **Vectorization**: Use :obj:`nnx.vmap` to process multiple graphs in parallel
 * **Automatic Differentiation**: Full support for :obj:`jax.grad` and optimization libraries like Optax
 * **XLA Backend**: Automatically optimized for your hardware (CPU/GPU/TPU)
@@ -233,7 +247,7 @@ JAX-Specific Optimizations
     import jax
 
     # JIT compile for speed
-    @jax.jit
+    @nnx.jit
     def fast_gnn_inference(model, x, edge_index):
         return model(x, edge_index)
 
@@ -246,7 +260,10 @@ JAX-Specific Optimizations
     import optax
     optimizer = nnx.Optimizer(model, optax.adam(0.01), wrt=nnx.Param)
 
-    @jax.jit
+    # `nnx.jit`, not `jax.jit`: under plain `jax.jit` the parameter update is traced on
+    # a copy of the state and silently discarded, so the loss never moves. See
+    # :doc:`/advanced/jit`.
+    @nnx.jit
     def train_step(model, optimizer, data, targets):
         def loss_fn(model):
             preds = model(data.x, data.edge_index)

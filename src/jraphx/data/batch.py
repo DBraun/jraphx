@@ -1,12 +1,63 @@
 """Batch data structure for representing multiple graphs as a single disconnected graph."""
 
+import dataclasses
 import sys
+from typing import Any, ClassVar
 
-from flax import struct
 from flax.struct import dataclass
 from jax import numpy as jnp
 
-from jraphx.data.data import Data
+from jraphx.data.data import Data, fields_equal
+
+
+def _require_all_present(key: str, values: list, num_graphs: int) -> None:
+    """Reject an attribute that only some of the batched graphs carry.
+
+    This is the rule for attributes aligned with the batch vector, such as node
+    features and per-graph labels: concatenating them when a graph omits its
+    contribution produces an array whose length no longer matches the batch
+    vector, silently misaligning every downstream scatter or gather.
+
+    Args:
+        key: Name of the attribute being collated.
+        values: The non-``None`` values collected for that attribute.
+        num_graphs: Total number of graphs being batched.
+
+    Raises:
+        RuntimeError: If ``values`` does not hold one entry per graph.
+    """
+    if len(values) != num_graphs:
+        raise RuntimeError(
+            f"Attribute {key!r} is present on {len(values)} of {num_graphs} graphs; "
+            "batching requires it on all graphs or none"
+        )
+
+
+def _require_axis_aligned(key: str, values: list, counts: list[int], axis_name: str) -> None:
+    """Reject an attribute whose rows disagree with the axis it aligns with.
+
+    This is the rule for attributes aligned with the edge or element axis rather
+    than with the batch vector. A graph that contributes no edges (or no indexed
+    elements) must contribute no rows, so omitting the attribute entirely is
+    legal there and only there.
+
+    Args:
+        key: Name of the attribute being collated.
+        values: Per-graph values for that attribute, holding ``None`` for every
+            graph that does not carry it.
+        counts: Per-graph length of the axis the attribute aligns with.
+        axis_name: Plural name of the aligned elements, used in the message.
+
+    Raises:
+        RuntimeError: If any graph's row count differs from its axis length.
+    """
+    for index, (value, count) in enumerate(zip(values, counts, strict=True)):
+        rows = 0 if value is None else value.shape[0]
+        if rows != count:
+            raise RuntimeError(
+                f"Attribute {key!r} has {rows} rows on graph {index} but that graph "
+                f"contributes {count} {axis_name}; the two must match"
+            )
 
 
 @dataclass
@@ -17,65 +68,110 @@ class Batch(Data):
     adjusting edge indices appropriately. A batch vector tracks which
     nodes belong to which graph.
 
+    Like :class:`Data`, a Batch is a pytree whose leaves are exactly its array
+    attributes, so it can be passed through :func:`jax.jit`, :func:`jax.vmap`
+    and :func:`jax.tree_util` transforms.
+
     For custom Data subclasses with additional fields, create a corresponding
-    Batch subclass and optionally override class attributes to specify batching behavior:
+    Batch subclass and override the class-level configuration to specify
+    batching behavior:
 
     ```python
+    from typing import ClassVar
+
     from flax.struct import dataclass
 
     @dataclass
     class FaceData(Data):
-        face: Optional[jnp.ndarray] = None
-        normal: Optional[jnp.ndarray] = None
-        face_color: Optional[jnp.ndarray] = None
+        face: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
+
+        # flax.struct.dataclass regenerates __eq__ for every subclass, so
+        # delegate to keep comparing array fields element-wise
+        def __eq__(self, other: object) -> bool:
+            return Data.__eq__(self, other)
 
     @dataclass
     class FaceBatch(Batch):
-        face: Optional[jnp.ndarray] = None
-        normal: Optional[jnp.ndarray] = None
-        face_color: Optional[jnp.ndarray] = None
+        face: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
 
-    # Specify which fields contain node indices that need adjustment
-    FaceBatch.NODE_INDEX_FIELDS = {'face'}
+        # Fields containing node indices that need offsetting
+        NODE_INDEX_FIELDS: ClassVar[set[str]] = {"face"}
 
-    # Specify which fields should be concatenated with element-level data
-    # (will be masked/filtered based on the corresponding node index field)
-    FaceBatch.ELEMENT_LEVEL_FIELDS = {'normal', 'face_color'}
+        # Fields aligned with the indexed elements, masked during unbatching
+        ELEMENT_LEVEL_FIELDS: ClassVar[set[str]] = {"normal", "face_color"}
 
-    # Link to corresponding Data class for proper unbatching
-    FaceBatch._DATA_CLASS = FaceData
+        # The Data class produced by :meth:`to_data_list`
+        _DATA_CLASS: ClassVar[type | None] = FaceData
+
+        def __eq__(self, other: object) -> bool:
+            return Batch.__eq__(self, other)
     ```
     """
 
-    # Override these in subclasses to customize batching behavior
-    NODE_INDEX_FIELDS: set[str] = struct.field(
-        default_factory=set
-    )  # Fields containing node indices to adjust
-    ELEMENT_LEVEL_FIELDS: set[str] = struct.field(
-        default_factory=set
-    )  # Fields aligned with indexed element data
-    GRAPH_LEVEL_FIELDS: set[str] = struct.field(
-        default_factory=set
-    )  # Fields that are per-graph (stacked, not concatenated)
+    # Class-level batching configuration; override these in subclasses.
+    # They are ClassVars rather than dataclass fields so that they stay out of
+    # the pytree: a set is neither a valid pytree node nor hashable static
+    # metadata, so declaring them as fields would break every JAX transform.
+    NODE_INDEX_FIELDS: ClassVar[set[str]] = set()  # Fields containing node indices to adjust
+    ELEMENT_LEVEL_FIELDS: ClassVar[set[str]] = set()  # Fields aligned with indexed element data
+    GRAPH_LEVEL_FIELDS: ClassVar[set[str]] = set()  # Fields that are per-graph (stacked)
 
-    # Store the corresponding Data class for unbatching
-    _DATA_CLASS: type = struct.field(pytree_node=False, default=None)
+    # The corresponding Data class used when unbatching
+    _DATA_CLASS: ClassVar[type | None] = None
+
+    @classmethod
+    def _primary_index_field(cls) -> str | None:
+        """Return the node index field that element-level attributes align with.
+
+        Returns:
+            The alphabetically first entry of :attr:`NODE_INDEX_FIELDS`, or
+            ``None`` when the class declares no index fields. The choice must
+            be deterministic -- set iteration order varies with the per-process
+            hash seed, and this field decides which element axis validation and
+            unbatching align with. A subclass with several index fields whose
+            element-level attributes follow a later one should override this
+            method.
+        """
+        return min(cls.NODE_INDEX_FIELDS, default=None)
 
     @classmethod
     def from_data_list(cls, data_list: list[Data]) -> "Batch":
         """Create a batch from a list of Data objects.
 
+        Attributes are collated with torch_geometric semantics: index fields are
+        offset by the running node count, fields listed in
+        :attr:`GRAPH_LEVEL_FIELDS` are stacked, scalars are stacked, and
+        everything else is concatenated along axis 0.
+
         Args:
-            data_list: List of Data objects to batch
+            data_list: List of Data objects to batch.
 
         Returns:
-            A Batch object containing all graphs
+            A Batch object containing all graphs.
+
+        Raises:
+            RuntimeError: If an attribute aligned with the batch vector is
+                present on some but not all graphs, or if an attribute aligned
+                with the edge or element axis contributes a number of rows that
+                differs from the number of edges or elements its graph
+                contributes. ``edge_index`` and the fields listed in
+                :attr:`NODE_INDEX_FIELDS` define those axes and are therefore
+                never required to be present: a graph may legitimately have no
+                edges and no indexed elements, in which case ``edge_attr`` and
+                the fields listed in :attr:`ELEMENT_LEVEL_FIELDS` may be absent
+                too.
         """
         if len(data_list) == 0:
             return cls()
 
+        num_graphs = len(data_list)
+
         # Collect all attributes in a dict first
-        batch_dict = {}
+        batch_dict: dict[str, Any] = {}
 
         # Collect all attribute keys
         keys = set()
@@ -83,14 +179,25 @@ class Batch(Data):
             keys.update(data.keys())
 
         # Get class-level batching configuration
-        node_index_fields = getattr(cls, "NODE_INDEX_FIELDS", set())
-        element_level_fields = getattr(cls, "ELEMENT_LEVEL_FIELDS", set())
-        graph_level_fields = getattr(cls, "GRAPH_LEVEL_FIELDS", set())
+        node_index_fields: set[str] = cls.NODE_INDEX_FIELDS
+        element_level_fields: set[str] = cls.ELEMENT_LEVEL_FIELDS
+        graph_level_fields: set[str] = cls.GRAPH_LEVEL_FIELDS
+
+        # Lengths of the axes that non-batch-aligned attributes align with
+        edge_counts = [
+            0 if data.edge_index is None else data.edge_index.shape[1] for data in data_list
+        ]
+        primary_index_field = cls._primary_index_field()
+        if primary_index_field is None:
+            element_counts = None
+        else:
+            primary_values = [getattr(data, primary_index_field, None) for data in data_list]
+            element_counts = [0 if v is None else v.shape[-1] for v in primary_values]
 
         # Process each attribute
         for key in keys:
-            values = [getattr(data, key, None) for data in data_list]
-            values = [v for v in values if v is not None]
+            raw_values = [getattr(data, key, None) for data in data_list]
+            values = [v for v in raw_values if v is not None]
 
             if len(values) == 0:
                 continue
@@ -121,51 +228,53 @@ class Batch(Data):
                 if adjusted_indices:
                     batch_dict[key] = jnp.concatenate(adjusted_indices, axis=-1)
 
-            elif key == "batch":
-                # Skip existing batch vectors
+            elif key in ("batch", "ptr"):
+                # Both are rebuilt from the node counts below
                 continue
 
             elif key in graph_level_fields:
                 # Stack graph-level attributes
-                if values:
-                    batch_dict[key] = jnp.stack(values)
+                _require_all_present(key, values, num_graphs)
+                batch_dict[key] = jnp.stack(values)
 
             elif key in element_level_fields:
-                # Concatenate element-level features
-                # These will be split during unbatching based on the corresponding node index field
-                if all(v is not None for v in values):
-                    batch_dict[key] = jnp.concatenate(values, axis=0)
+                # Element-level features align with the elements indexed by the
+                # primary node index field, so a graph with no elements
+                # contributes no rows. They are split during unbatching using
+                # that field's mask.
+                if element_counts is None:
+                    _require_all_present(key, values, num_graphs)
+                else:
+                    _require_axis_aligned(key, raw_values, element_counts, "elements")
+                batch_dict[key] = jnp.concatenate(values, axis=0)
 
-            elif key in ["x", "edge_attr", "pos"]:
-                # Standard node/edge features
-                if all(v is not None for v in values):
-                    batch_dict[key] = jnp.concatenate(values, axis=0)
+            elif key == "edge_attr":
+                # Edge features align with the edge axis rather than with the
+                # batch vector, so a graph with no edges contributes no rows.
+                _require_axis_aligned(key, raw_values, edge_counts, "edges")
+                batch_dict[key] = jnp.concatenate(values, axis=0)
 
-            elif key == "y":
-                # Handle labels based on their shape
-                if len(values) > 0:
-                    first_y = values[0]
-                    if first_y.ndim == 0 or (first_y.ndim == 1 and first_y.shape[0] == 1):
-                        # Graph-level labels
-                        batch_dict["y"] = jnp.stack(values)
-                    else:
-                        # Node-level labels
-                        batch_dict["y"] = jnp.concatenate(values, axis=0)
+            elif key in ["x", "pos", "y"]:
+                # Standard node features and labels. Scalars are promoted to a
+                # leading graph axis; everything else concatenates, so a
+                # per-graph label of shape (1,) and a node-level label both end
+                # up on axis 0 exactly as torch_geometric collates them.
+                _require_all_present(key, values, num_graphs)
+                if values[0].ndim == 0:
+                    batch_dict[key] = jnp.stack(values)
+                else:
+                    batch_dict[key] = jnp.concatenate(values, axis=0)
 
             else:
-                # Handle unknown custom attributes with reasonable defaults
+                # Unknown custom attributes follow the same default collation
+                _require_all_present(key, values, num_graphs)
                 if all(hasattr(v, "shape") for v in values):
-                    # Try to concatenate tensor attributes
-                    try:
+                    if values[0].ndim == 0:
+                        batch_dict[key] = jnp.stack(values)
+                    else:
                         batch_dict[key] = jnp.concatenate(values, axis=0)
-                    except (ValueError, TypeError):
-                        # If concat fails, try stacking
-                        try:
-                            batch_dict[key] = jnp.stack(values)
-                        except (ValueError, TypeError):
-                            batch_dict[key] = values
                 else:
-                    # Non-tensor attributes
+                    # Non-array attributes are kept as a per-graph list
                     batch_dict[key] = values
 
         # Create batch vector
@@ -187,17 +296,33 @@ class Batch(Data):
     def to_data_list(self) -> list[Data]:
         """Convert batch back to a list of Data objects.
 
+        Nodes are renumbered by their rank within their own graph, so the split
+        is correct for any batch vector, including one that is not sorted. A
+        graph that contributes no nodes or no edges is preserved as an empty
+        graph rather than dropped.
+
+        The distinction between a graph-level and a node-level ``y`` is
+        recovered from its leading dimension, which is ambiguous when the batch
+        happens to hold exactly one node per graph; in that case ``y`` is read
+        as graph-level. A graph-level label is returned with a leading axis of
+        length one, so a label collated from per-graph scalars comes back with
+        shape ``(1,)``.
+
         Returns:
-            List of individual Data objects
+            List of individual Data objects.
+
+        .. note::
+            The number of outputs and their shapes depend on array contents, so
+            this method reads concrete values and cannot be traced by
+            :func:`jax.jit`.
         """
         if self.batch is None:
             return [self]
 
-        # Get number of graphs
-        num_graphs = self.batch.max() + 1
+        num_graphs = self.num_graphs
 
         # Determine the Data class to use for unbatching
-        data_class = getattr(type(self), "_DATA_CLASS", None)
+        data_class: type[Data] | None = type(self)._DATA_CLASS
         if data_class is None:
             # Fallback: try to find in same module
             if type(self).__name__.endswith("Batch"):
@@ -208,13 +333,13 @@ class Batch(Data):
                 data_class = Data
 
         # Get batching configuration
-        node_index_fields = getattr(type(self), "NODE_INDEX_FIELDS", set())
-        element_level_fields = getattr(type(self), "ELEMENT_LEVEL_FIELDS", set())
-        graph_level_fields = getattr(type(self), "GRAPH_LEVEL_FIELDS", set())
+        node_index_fields: set[str] = type(self).NODE_INDEX_FIELDS
+        element_level_fields: set[str] = type(self).ELEMENT_LEVEL_FIELDS
+        graph_level_fields: set[str] = type(self).GRAPH_LEVEL_FIELDS
 
-        # Find the primary node index field for face-level data
-        # (Usually the first one, like 'face' for face-level attributes)
-        primary_index_field = list(node_index_fields)[0] if node_index_fields else None
+        # Find the primary node index field that element-level data aligns with
+        # (Usually the only one, like 'face' for face-level attributes)
+        primary_index_field = type(self)._primary_index_field()
 
         # Split data back into individual graphs
         data_list = []
@@ -223,9 +348,9 @@ class Batch(Data):
             # Collect attributes for this graph
             data_dict = {}
 
-            # Get node mask for this graph
+            # Get node mask for this graph and the rank of each node within it
             node_mask = self.batch == i
-            node_indices = jnp.where(node_mask)[0]
+            node_map = jnp.cumsum(node_mask) - 1
 
             # Extract node features
             if self.x is not None:
@@ -236,63 +361,48 @@ class Batch(Data):
 
             # Extract edges for this graph
             if self.edge_index is not None:
-                # Find edges where both endpoints belong to this graph
-                edge_mask = jnp.isin(self.edge_index[0], node_indices) & jnp.isin(
-                    self.edge_index[1], node_indices
-                )
+                # Keep edges whose endpoints both belong to this graph
+                edge_mask = node_mask[self.edge_index[0]] & node_mask[self.edge_index[1]]
+                edges = self.edge_index[:, edge_mask]
+                data_dict["edge_index"] = node_map[edges].astype(self.edge_index.dtype)
 
-                if jnp.any(edge_mask):
-                    # Get edges and remap indices
-                    edges = self.edge_index[:, edge_mask]
-
-                    # Create mapping from old to new indices
-                    min_idx = node_indices.min()
-                    edges = edges - min_idx
-                    data_dict["edge_index"] = edges
-
-                    # Extract edge attributes
-                    if self.edge_attr is not None:
-                        data_dict["edge_attr"] = self.edge_attr[edge_mask]
+                # Extract edge attributes
+                if self.edge_attr is not None:
+                    data_dict["edge_attr"] = self.edge_attr[edge_mask]
 
             # Handle custom node index fields
             element_mask = None  # Will be used for face-level attributes
             for field in node_index_fields:
-                if hasattr(self, field):
-                    field_val = getattr(self, field)
-                    if field_val is not None:
-                        # Find elements where all indices belong to this graph
-                        mask = jnp.all(jnp.isin(field_val, node_indices), axis=0)
+                field_val = getattr(self, field)
+                if field_val is not None:
+                    # Keep elements whose indices all belong to this graph
+                    mask = jnp.all(node_mask[field_val], axis=0)
+                    elements = field_val[:, mask]
+                    data_dict[field] = node_map[elements].astype(field_val.dtype)
 
-                        if jnp.any(mask):
-                            elements = field_val[:, mask]
-                            min_idx = node_indices.min() if node_indices.size > 0 else 0
-                            elements = elements - min_idx
-                            data_dict[field] = elements
-
-                            # Store mask for face-level attributes
-                            if field == primary_index_field:
-                                element_mask = mask
+                    # Store mask for element-level attributes
+                    if field == primary_index_field:
+                        element_mask = mask
 
             # Handle element-level attributes using the element mask
             if element_mask is not None:
                 for field in element_level_fields:
-                    if hasattr(self, field):
-                        field_val = getattr(self, field)
-                        if field_val is not None:
-                            data_dict[field] = field_val[element_mask]
+                    field_val = getattr(self, field)
+                    if field_val is not None:
+                        data_dict[field] = field_val[element_mask]
 
             # Handle graph-level attributes
             for field in graph_level_fields:
-                if hasattr(self, field):
-                    field_val = getattr(self, field)
-                    if field_val is not None:
-                        data_dict[field] = field_val[i]
+                field_val = getattr(self, field)
+                if field_val is not None:
+                    data_dict[field] = field_val[i]
 
             # Handle labels
             if self.y is not None:
                 if self.y.shape[0] == num_graphs:
-                    # Graph-level labels
-                    data_dict["y"] = self.y[i]
+                    # Graph-level labels keep their leading axis, mirroring the
+                    # narrow torch_geometric applies along the collation axis
+                    data_dict["y"] = self.y[i : i + 1]
                 else:
                     # Node-level labels
                     data_dict["y"] = self.y[node_mask]
@@ -307,16 +417,38 @@ class Batch(Data):
     def num_graphs(self) -> int:
         """Number of graphs in the batch.
 
+        ``ptr`` is preferred because it records one entry per graph and can
+        therefore represent a graph with zero nodes, which the batch vector
+        cannot.
+
+        Returns:
+            Number of graphs as a Python integer.
+
         .. note::
-            When inferring from batch vector, this may not be JIT-compatible
-            due to dynamic computation.
+            The ``batch`` fallback reads a concrete array value and therefore
+            raises under :func:`jax.jit`.
         """
-        if self.batch is not None:
-            return self.batch.max() + 1
-        elif self.ptr is not None:
+        if self.ptr is not None:
             return len(self.ptr) - 1
+        elif self.batch is not None:
+            return int(self.batch.max()) + 1
         else:
             return 1
+
+    def __eq__(self, other: object) -> bool:
+        """Compare element-wise against another batch of the same type.
+
+        Args:
+            other: Object to compare against.
+
+        Returns:
+            True if ``other`` has the same type and equal field values,
+            ``NotImplemented`` if the types differ so Python can try the
+            reflected comparison.
+        """
+        if type(self) is not type(other):
+            return NotImplemented
+        return fields_equal(self, other)
 
     def __repr__(self) -> str:
         """String representation of the Batch object."""
@@ -327,23 +459,13 @@ class Batch(Data):
         if num_graphs > 1:
             info.append(f"batch_size={num_graphs}")
 
-        # Fields to exclude from repr
-        exclude_fields = {
-            "NODE_INDEX_FIELDS",
-            "ELEMENT_LEVEL_FIELDS",
-            "GRAPH_LEVEL_FIELDS",
-            "_DATA_CLASS",
-        }
-
         # Get all non-None attributes
-        for field in self.__dataclass_fields__:
-            if field in exclude_fields:
-                continue
-            value = getattr(self, field)
+        for field in dataclasses.fields(self):
+            value = getattr(self, field.name)
             if value is not None:
                 if hasattr(value, "shape"):
-                    info.append(f"{field}={list(value.shape)}")
+                    info.append(f"{field.name}={list(value.shape)}")
                 else:
-                    info.append(f"{field}={value}")
+                    info.append(f"{field.name}={value}")
 
         return f"{self.__class__.__name__}({', '.join(info)})"

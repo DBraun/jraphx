@@ -2,6 +2,7 @@
 
 from typing import Literal, Union
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx import Linear, Param, Rngs
@@ -17,14 +18,12 @@ class SAGEConv(MessagePassing):
         \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
         \mathrm{mean}_{j \in \mathcal{N(i)}} \mathbf{x}_j
 
-    If :obj:`project = True`, then :math:`\mathbf{x}_j` will first get
-    projected via
-
-    .. math::
-        \mathbf{x}_j \leftarrow \sigma ( \mathbf{W}_3 \mathbf{x}_j +
-        \mathbf{b})
-
-    as described in Eq. (3) of the paper.
+    The neighbor transformation :math:`\mathbf{W}_2` is applied to the
+    *aggregated* neighborhood, as the equation above shows. This is what the
+    :obj:`aggr="max"` variant needs: an elementwise maximum does not commute
+    with a linear map, so aggregating in the input space is the difference
+    between :math:`\mathbf{W}_2 (\max_j \mathbf{x}_j)` and the wrong
+    :math:`\max_j (\mathbf{W}_2 \mathbf{x}_j)`.
 
     Args:
         in_features (int or tuple): Size of each input sample, or tuple for
@@ -32,7 +31,9 @@ class SAGEConv(MessagePassing):
             target dimensionalities.
         out_features (int): Size of each output sample.
         aggr (str, optional): The aggregation scheme to use.
-            Can be :obj:`"mean"`, :obj:`"max"`, :obj:`"lstm"`, or :obj:`"gcn"`.
+            Can be :obj:`"mean"`, :obj:`"max"`, or :obj:`"gcn"`. Passing
+            :obj:`"lstm"` raises :obj:`NotImplementedError`; PyG's LSTM
+            aggregation is not implemented.
             (default: :obj:`"mean"`)
         normalize (bool, optional): If set to :obj:`True`, output features
             will be :math:`\ell_2`-normalized, *i.e.*,
@@ -64,7 +65,8 @@ class SAGEConv(MessagePassing):
         normalize: bool = False,
         root_weight: bool = True,
         bias: bool = True,
-        rngs: Rngs | None = None,
+        *,
+        rngs: Rngs,
     ):
         """Initialize the GraphSAGE layer."""
         if aggr == "lstm":
@@ -76,6 +78,11 @@ class SAGEConv(MessagePassing):
             root_weight = False
         else:
             super().__init__(aggr=aggr)
+
+        # Declared up front so that every branch below agrees on the attribute
+        # types; `bias` is only replaced when this layer owns its own bias.
+        self.lin_r: Linear | None
+        self.bias: Param | None = nnx.data(None)
 
         self.in_features = in_features
         self.out_features = out_features
@@ -127,24 +134,31 @@ class SAGEConv(MessagePassing):
 
     def __call__(
         self,
-        x: Union[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]],
-        edge_index: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array | None]],
+        edge_index: jax.Array,
+        edge_attr: jax.Array | None = None,
         size: tuple[int, int] | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Forward pass of the GraphSAGE layer.
 
         Args:
-            x: Node features or tuple of (source, target) features for bipartite graphs
+            x: Node features, or a ``(x_src, x_dst)`` tuple for bipartite graphs.
+                ``x_dst`` may be :obj:`None`, in which case no root features are
+                added and the target set is assumed to be as large as the source
+                set unless ``size`` says otherwise.
             edge_index: Edge indices [2, num_edges]
             edge_attr: Optional edge features (not used in GraphSAGE)
             size: Optional size (num_src_nodes, num_dst_nodes) for bipartite graphs
 
         Returns:
-            Updated node features [num_nodes, out_features]
+            Updated node features [num_dst_nodes, out_features]
         """
         if isinstance(x, tuple):
             x_src, x_dst = x
+            # The aggregation buffer is sized by the target set
+            if size is None:
+                num_dst_nodes = x_src.shape[0] if x_dst is None else x_dst.shape[0]
+                size = (x_src.shape[0], num_dst_nodes)
         else:
             x_src = x_dst = x
 
@@ -156,18 +170,18 @@ class SAGEConv(MessagePassing):
             # Propagate (includes self-loops by default in GCN)
             out = self.propagate(edge_index, x_src, edge_attr, size)
         else:
-            # Standard GraphSAGE aggregation
-            # Transform neighbor features
-            x_j = self.lin(x_src)
-
-            # Aggregate neighbor features
-            out = self.propagate(edge_index, x_j, edge_attr, size)
+            # Aggregate the raw source features, then transform. The order is not
+            # arbitrary: `aggr="max"` does not commute with `self.lin`, so mapping
+            # first would compute an elementwise maximum in the *output* space and
+            # mix columns drawn from different source nodes.
+            out = self.propagate(edge_index, x_src, edge_attr, size)
+            out = self.lin(out)
 
             # Add transformed root features
-            if self.root_weight and x_dst is not None:
+            if self.lin_r is not None and x_dst is not None:
                 out = out + self.lin_r(x_dst)
-            elif hasattr(self, "bias") and self.bias is not None:
-                out = out + self.bias.value
+            elif self.bias is not None:
+                out = out + self.bias[...]
 
         # L2 normalization
         if self.normalize:
@@ -177,28 +191,28 @@ class SAGEConv(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray | None = None,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
         """Construct messages from source nodes.
 
         Args:
-            x_j: Source node features [num_edges, out_features]
+            x_j: Source node features [num_edges, in_features]
             x_i: Target node features (not used)
             edge_attr: Edge features (not used)
 
         Returns:
-            Messages [num_edges, out_features]
+            Messages [num_edges, in_features]
         """
         return x_j
 
     def aggregate(
         self,
-        messages: jnp.ndarray,
-        index: jnp.ndarray,
+        messages: jax.Array,
+        index: jax.Array,
         dim_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Aggregate messages based on the specified method.
 
         Args:

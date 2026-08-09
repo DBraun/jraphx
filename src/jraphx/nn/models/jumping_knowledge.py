@@ -1,5 +1,6 @@
 """Jumping Knowledge aggregation module for JraphX."""
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -29,16 +30,18 @@ class JumpingKnowledge(nnx.Module):
         \sum_{t=1}^T \alpha_v^{(t)} \mathbf{x}_v^{(t)}
 
     with attention scores :math:`\alpha_v^{(t)}` obtained from a bi-directional
-    LSTM (:obj:`"lstm"`).
+    recurrent network (:obj:`"lstm"`). The mode keeps PyG's name, but the
+    recurrence is a pair of :class:`flax.nnx.GRUCell` modules run in opposite
+    directions, not an LSTM, so its parameters and outputs differ from PyG's.
 
     Args:
         mode (str): The aggregation scheme to use
             (:obj:`"cat"`, :obj:`"max"` or :obj:`"lstm"`).
         num_features (int, optional): The number of features per representation.
-            Needs to be only set for LSTM-style aggregation.
+            Needs to be only set for :obj:`"lstm"`-mode aggregation.
             (default: :obj:`None`)
         num_layers (int, optional): The number of layers to aggregate. Needs to
-            be only set for LSTM-style aggregation. (default: :obj:`None`)
+            be only set for :obj:`"lstm"`-mode aggregation. (default: :obj:`None`)
         rngs: Random number generators for initialization.
     """
 
@@ -51,11 +54,25 @@ class JumpingKnowledge(nnx.Module):
     ):
         super().__init__()
         self.mode = mode.lower()
-        assert self.mode in ["cat", "max", "lstm"], f"Invalid mode: {mode}"
+        if self.mode not in ["cat", "max", "lstm"]:
+            raise ValueError(f"Invalid mode: {mode}; expected one of 'cat', 'max', 'lstm'")
+
+        self.features: int | None
+        self.num_layers: int | None
+        self.rnn_forward: nnx.GRUCell | None
+        self.rnn_backward: nnx.GRUCell | None
+        self.att: nnx.Linear | None
 
         if self.mode == "lstm":
-            assert num_features is not None, "features cannot be None for lstm mode"
-            assert num_layers is not None, "num_layers cannot be None for lstm mode"
+            if num_features is None:
+                raise ValueError("'num_features' is required for mode='lstm'")
+            if num_layers is None:
+                raise ValueError("'num_layers' is required for mode='lstm'")
+            if rngs is None:
+                raise ValueError(
+                    "'rngs' is required for mode='lstm', which builds two GRU cells and "
+                    "an attention layer"
+                )
 
             self.features = num_features
             self.num_layers = num_layers
@@ -90,7 +107,7 @@ class JumpingKnowledge(nnx.Module):
             self.rnn_backward = nnx.data(None)
             self.att = nnx.data(None)
 
-    def __call__(self, xs: list[jnp.ndarray]) -> jnp.ndarray:
+    def __call__(self, xs: list[jax.Array]) -> jax.Array:
         """Forward pass.
 
         Args:
@@ -109,6 +126,16 @@ class JumpingKnowledge(nnx.Module):
             return jnp.max(stacked, axis=-1)  # [num_nodes, features]
 
         else:  # self.mode == "lstm"
+            # Set together with the mode in __init__; restated so that the types
+            # are narrowed for the rest of this branch.
+            if (
+                self.rnn_forward is None
+                or self.rnn_backward is None
+                or self.att is None
+                or self.num_layers is None
+            ):
+                raise RuntimeError("mode='lstm' requires the recurrent layers to be built")
+
             # Stack representations
             x = jnp.stack(xs, axis=1)  # [num_nodes, num_layers, features]
             num_nodes = x.shape[0]
@@ -125,14 +152,14 @@ class JumpingKnowledge(nnx.Module):
 
             # Forward pass through time
             for t in range(self.num_layers):
-                # GRUCell returns (output, new_state) tuple
-                _, hidden_forward = self.rnn_forward(x[:, t, :], hidden_forward)
+                # GRUCell takes (carry, inputs) and returns (new_carry, output)
+                hidden_forward, _ = self.rnn_forward(hidden_forward, x[:, t, :])
                 forward_outputs.append(hidden_forward)
 
             # Backward pass through time
             for t in range(self.num_layers - 1, -1, -1):
-                # GRUCell returns (output, new_state) tuple
-                _, hidden_backward = self.rnn_backward(x[:, t, :], hidden_backward)
+                # GRUCell takes (carry, inputs) and returns (new_carry, output)
+                hidden_backward, _ = self.rnn_backward(hidden_backward, x[:, t, :])
                 backward_outputs.append(hidden_backward)
 
             # Reverse backward outputs to match time order

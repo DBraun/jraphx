@@ -233,9 +233,9 @@ GINConv
 
       # Create MLP for GIN
       mlp = MLP(
-          channel_list=[16, 32, 32],
+          feature_list=[16, 32, 32],
           norm="batch_norm",
-          act="relu",
+          act=nnx.relu,
           rngs=nnx.Rngs(0)
       )
 
@@ -246,6 +246,44 @@ GINConv
       )
 
       out = conv(x, edge_index)
+
+GINEConv
+~~~~~~~~
+
+.. autoclass:: GINEConv
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   GIN with edge features from `Hu et al. (2020) <https://arxiv.org/abs/1905.12265>`_.
+
+   **Key Features:**
+
+   - GIN's aggregation with edge features fused into every message
+   - Edge features of a different width are linearly projected via ``edge_dim``
+   - Learnable or fixed epsilon parameter
+
+   **Example:**
+
+   .. code-block:: python
+
+      from jraphx.nn.conv import GINEConv
+      from jraphx.nn.models import MLP
+      import flax.nnx as nnx
+
+      mlp = MLP(
+          feature_list=[16, 32, 32],
+          rngs=nnx.Rngs(0)
+      )
+
+      conv = GINEConv(
+          nn=mlp,
+          eps=0.0,
+          edge_dim=8,  # Project 8-wide edge features to the node width
+          rngs=nnx.Rngs(1)
+      )
+
+      out = conv(x, edge_index, edge_attr=edge_attr)
 
 EdgeConv
 ~~~~~~~~
@@ -273,7 +311,7 @@ EdgeConv
 
       # MLP processes edge features [x_i || x_j - x_i]
       mlp = MLP(
-          channel_list=[32, 64, 64],
+          feature_list=[32, 64, 64],
           rngs=nnx.Rngs(0)
       )
 
@@ -312,7 +350,7 @@ DynamicEdgeConv
 
       # Create MLP for edge processing [x_i || x_j - x_i]
       mlp = MLP(
-          channel_list=[6, 64, 128],  # Input: 2*3=6 for 3D points
+          feature_list=[6, 64, 128],  # Input: 2*3=6 for 3D points
           rngs=nnx.Rngs(0)
       )
 
@@ -447,7 +485,8 @@ Performance Tips
 **Memory Efficiency:**
 
 - Use ``concat=False`` in attention layers to reduce memory
-- Consider ``aggr='mean'`` over ``aggr='lstm'`` for large graphs
+- Prefer ``aggr='mean'`` or ``aggr='max'``; ``aggr='lstm'`` is not implemented
+  and raises :obj:`NotImplementedError`
 - Use sparse operations when available
 
 Edge Features
@@ -458,11 +497,11 @@ Many layers support edge features:
 .. code-block:: python
 
    # GATv2 with edge features
-   conv = GATv2Conv(16, 32, heads=8, edge_dim=4)
+   conv = GATv2Conv(16, 32, heads=8, edge_dim=4, rngs=nnx.Rngs(0))
    out = conv(x, edge_index, edge_attr=edge_features)
 
    # TransformerConv with edge features
-   conv = TransformerConv(16, 32, heads=8, edge_dim=4)
+   conv = TransformerConv(16, 32, heads=8, edge_dim=4, rngs=nnx.Rngs(0))
    out = conv(x, edge_index, edge_attr=edge_features)
 
 Advanced Usage
@@ -492,8 +531,8 @@ Heterogeneous Graphs
    edge_index_2 = ...  # Type 2 edges
 
    # Use different convolutions
-   conv1 = GCNConv(16, 32)
-   conv2 = SAGEConv(16, 32)
+   conv1 = GCNConv(16, 32, rngs=nnx.Rngs(0))
+   conv2 = SAGEConv(16, 32, rngs=nnx.Rngs(1))
 
    out1 = conv1(x, edge_index_1)
    out2 = conv2(x, edge_index_2)

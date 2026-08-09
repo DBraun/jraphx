@@ -1,10 +1,11 @@
-from typing import Any
-
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.module import first_from
 from flax.nnx.nn import initializers
-from flax.typing import Dtype, Initializer
+from flax.typing import Initializer
+
+from jraphx.utils.dtype import parse_dtype
 
 
 class BatchNorm(nnx.Module):
@@ -36,20 +37,25 @@ class BatchNorm(nnx.Module):
         use_running_average (bool, optional): If set to :obj:`True`, use
             running statistics instead of batch statistics during evaluation.
             (default: :obj:`False`)
-        axis (int, optional): The feature or non-batch axis of the input.
-            (default: :obj:`-1`)
         dtype: The dtype of the result (default: infer from input and params).
+            Strings such as ``"bfloat16"`` are resolved with
+            :func:`~jraphx.utils.parse_dtype`.
         param_dtype: The dtype passed to parameter initializers (default: float32).
+            Accepts the same strings.
         use_bias (bool, optional): If True, bias (beta) is added.
             (default: :obj:`True`)
         use_scale (bool, optional): If True, multiply by scale (gamma).
             (default: :obj:`True`)
         bias_init: Initializer for bias, by default, zero.
         scale_init: Initializer for scale, by default, one.
-        axis_name: The axis name used to combine batch statistics from multiple devices.
-        axis_index_groups: Groups of axis indices within that named axis.
-        use_fast_variance: If true, use faster, but less numerically stable variance calculation.
         rngs: Random number generators for initialization.
+
+    .. note::
+        Statistics are always pooled over the node axis with features on the
+        last axis, and there is no cross-device statistics synchronization;
+        the ``axis``, ``axis_name``, ``axis_index_groups`` and
+        ``use_fast_variance`` arguments of :class:`flax.nnx.BatchNorm` do not
+        exist here.
     """
 
     def __init__(
@@ -60,16 +66,12 @@ class BatchNorm(nnx.Module):
         track_running_stats: bool = True,
         use_running_average: bool = False,
         *,
-        axis: int = -1,
-        dtype: Dtype | None = None,
-        param_dtype: Dtype = jnp.float32,
+        dtype: str | type | jnp.dtype | None = None,
+        param_dtype: str | type | jnp.dtype = jnp.float32,
         use_bias: bool = True,
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
         scale_init: Initializer = initializers.ones_init(),
-        axis_name: str | None = None,
-        axis_index_groups: Any = None,
-        use_fast_variance: bool = True,
         rngs: nnx.Rngs | None = None,
     ):
         self.num_features = num_features
@@ -77,31 +79,27 @@ class BatchNorm(nnx.Module):
         self.momentum = momentum
         self.track_running_stats = track_running_stats
         self.use_running_average = use_running_average
-        self.axis = axis
-        self.dtype = dtype
-        self.param_dtype = param_dtype
+        self.dtype = None if dtype is None else parse_dtype(dtype)
+        self.param_dtype = parse_dtype(param_dtype)
         self.use_bias = use_bias
         self.use_scale = use_scale
         self.bias_init = bias_init
         self.scale_init = scale_init
-        self.axis_name = axis_name
-        self.axis_index_groups = axis_index_groups
-        self.use_fast_variance = use_fast_variance
 
         feature_shape = (num_features,)
 
         # Learnable parameters
-        self.weight: nnx.Param = nnx.data(None)
-        self.bias: nnx.Param = nnx.data(None)
+        self.weight: nnx.Param | None = nnx.data(None)
+        self.bias: nnx.Param | None = nnx.data(None)
 
         if use_scale or use_bias:
             if rngs is not None:
                 if use_scale:
                     key = rngs.params()
-                    self.weight = nnx.Param(scale_init(key, feature_shape, param_dtype))
+                    self.weight = nnx.Param(scale_init(key, feature_shape, self.param_dtype))
                 if use_bias:
                     key = rngs.params()
-                    self.bias = nnx.Param(bias_init(key, feature_shape, param_dtype))
+                    self.bias = nnx.Param(bias_init(key, feature_shape, self.param_dtype))
             else:
                 # Fallback for backward compatibility when no rngs provided
                 if use_scale:
@@ -110,10 +108,13 @@ class BatchNorm(nnx.Module):
                     self.bias = nnx.Param(jnp.zeros(feature_shape))
 
         # Running statistics
+        self.running_mean: nnx.BatchStat | None
+        self.running_var: nnx.BatchStat | None
+        self.num_batches_tracked: nnx.BatchStat | None
         if track_running_stats:
-            self.running_mean = nnx.Variable(jnp.zeros(num_features))
-            self.running_var = nnx.Variable(jnp.ones(num_features))
-            self.num_batches_tracked = nnx.Variable(jnp.array(0, dtype=jnp.int32))
+            self.running_mean = nnx.BatchStat(jnp.zeros(num_features))
+            self.running_var = nnx.BatchStat(jnp.ones(num_features))
+            self.num_batches_tracked = nnx.BatchStat(jnp.array(0, dtype=jnp.int32))
         else:
             self.running_mean = nnx.data(None)
             self.running_var = nnx.data(None)
@@ -121,17 +122,22 @@ class BatchNorm(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
         *,
         use_running_average: bool | None = None,
-        mask: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        mask: jax.Array | None = None,
+    ) -> jax.Array:
         """Apply batch normalization.
 
         Args:
             x: Node features [num_nodes, num_features]
-            batch: Batch assignment vector [num_nodes] (optional)
+            batch: Batch assignment vector [num_nodes]. Accepted for API
+                symmetry with :class:`~jraphx.nn.norm.GraphNorm` and
+                :class:`~jraphx.nn.norm.LayerNorm`, and deliberately ignored:
+                batch normalization pools statistics over every node of the
+                mini-batch regardless of graph membership. Use
+                :class:`~jraphx.nn.norm.GraphNorm` for per-graph statistics.
             use_running_average: If True, use running statistics. If False, compute
                 batch statistics. If None, determined by training state.
             mask: Binary array for masked normalization (optional)
@@ -148,53 +154,37 @@ class BatchNorm(nnx.Module):
         )
 
         if not use_running_average:
-            # Compute batch statistics
-            if batch is not None:
-                # Compute per-batch statistics and average them
-                batch_size = int(batch.max()) + 1
-                mean = jnp.zeros((batch_size, self.num_features))
-                var = jnp.zeros((batch_size, self.num_features))
-
-                for b in range(batch_size):
-                    batch_mask = batch == b
-                    batch_x = x[batch_mask]
-                    if batch_x.shape[0] > 0:
-                        if mask is not None:
-                            node_mask = mask[batch_mask]
-                            mean = mean.at[b].set(jnp.average(batch_x, axis=0, weights=node_mask))
-                            var = var.at[b].set(
-                                jnp.average((batch_x - mean[b]) ** 2, axis=0, weights=node_mask)
-                            )
-                        else:
-                            mean = mean.at[b].set(batch_x.mean(axis=0))
-                            var = var.at[b].set(batch_x.var(axis=0))
-
-                # Average across batches
-                mean = mean.mean(axis=0)
-                var = var.mean(axis=0)
+            # Statistics pooled over all nodes of the mini-batch
+            if mask is not None:
+                mean = jnp.average(x, axis=0, weights=mask)
+                var = jnp.average((x - mean) ** 2, axis=0, weights=mask)
+                count = jnp.sum(mask).astype(var.dtype)
             else:
-                # Global statistics across all nodes
-                if mask is not None:
-                    mean = jnp.average(x, axis=0, weights=mask)
-                    var = jnp.average((x - mean) ** 2, axis=0, weights=mask)
-                else:
-                    mean = x.mean(axis=0)
-                    var = x.var(axis=0)
+                mean = x.mean(axis=0)
+                var = x.var(axis=0)
+                count = jnp.asarray(x.shape[0], dtype=var.dtype)
 
             # Update running statistics
-            if self.track_running_stats:
-                self.running_mean.value = (
-                    self.momentum * self.running_mean.value + (1 - self.momentum) * mean
+            if (
+                self.running_mean is not None
+                and self.running_var is not None
+                and self.num_batches_tracked is not None
+            ):
+                # Running variance tracks the unbiased estimator, matching
+                # PyTorch/PyG, while normalization uses the biased one.
+                unbiased_var = var * count / jnp.maximum(count - 1.0, 1.0)
+                self.running_mean[...] = (
+                    self.momentum * self.running_mean[...] + (1 - self.momentum) * mean
                 )
-                self.running_var.value = (
-                    self.momentum * self.running_var.value + (1 - self.momentum) * var
+                self.running_var[...] = (
+                    self.momentum * self.running_var[...] + (1 - self.momentum) * unbiased_var
                 )
-                self.num_batches_tracked.value += 1
+                self.num_batches_tracked[...] += 1
         else:
             # Use running statistics
-            if self.track_running_stats:
-                mean = self.running_mean.value
-                var = self.running_var.value
+            if self.running_mean is not None and self.running_var is not None:
+                mean = self.running_mean[...]
+                var = self.running_var[...]
             else:
                 # Fallback to batch statistics
                 if mask is not None:
@@ -210,9 +200,9 @@ class BatchNorm(nnx.Module):
         # Scale and shift
         out = x_norm
         if self.weight is not None:
-            out = self.weight.value * out
+            out = self.weight[...] * out
         if self.bias is not None:
-            out = out + self.bias.value
+            out = out + self.bias[...]
 
         # Apply dtype conversion if specified
         if self.dtype is not None:

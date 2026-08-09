@@ -3,11 +3,14 @@
 Converted from PyTorch Geometric test_basic_gnn.py to test JraphX functionality.
 """
 
+import jax
 import jax.numpy as jnp
 import pytest
 from flax import nnx
 
+from jraphx.nn.conv import GCNConv, MessagePassing
 from jraphx.nn.models import GAT, GCN, GIN, GraphSAGE
+from jraphx.nn.models.basic_gnn import BasicGNN
 
 # Test parameters - matching PyG test structure
 out_dims = [None, 8]
@@ -160,31 +163,27 @@ def test_gat(out_dim, dropout, act, norm, jk):
 
 @pytest.mark.parametrize("out_dim", out_dims)
 @pytest.mark.parametrize("jk", jks)
-def test_one_layer_gnn(out_dim, jk):
-    """Test GNN models with single layer."""
+@pytest.mark.parametrize("model_cls", [GCN, GraphSAGE, GIN, GAT])
+def test_one_layer_gnn(out_dim, jk, model_cls):
+    """A single-layer model honors out_features exactly like a deeper one."""
     x, edge_index = create_test_data()
+    out_features = 16 if out_dim is None else out_dim
 
-    # TODO: JraphX BasicGNN has a design limitation for single-layer networks:
-    # - When num_layers=1 and jk=None, the output size is always hidden_features
-    # - When num_layers=1 and jk is not None, final projection is applied
-    if jk is None:
-        # Single layer without JK always outputs hidden_features
-        out_features = 16  # hidden_features
-    else:
-        # With JK, final linear projection is applied
-        out_features = 16 if out_dim is None else out_dim
-
-    model = GraphSAGE(
+    kwargs = {"heads": 4} if model_cls is GAT else {}
+    model = model_cls(
         in_features=8,
         hidden_features=16,
         num_layers=1,
         out_features=out_dim,
         jk=jk,
         rngs=nnx.Rngs(42),
+        **kwargs,
     )
 
     output = model(x, edge_index)
     assert output.shape == (3, out_features)
+    # The advertised width and the emitted width must not drift apart
+    assert model.out_features == output.shape[-1]
 
 
 def test_batch_processing():
@@ -213,7 +212,7 @@ def test_batch_processing():
 # - test_basic_gnn_cache() - PyG-specific caching mechanism
 
 # TODO: PyG models not yet implemented in JraphX:
-# - PNA (Principal Neighbourhood Aggregation)
+# - PNA (Principal Neighborhood Aggregation)
 # - EdgeCNN (EdgeConv)
 
 
@@ -231,6 +230,227 @@ def test_residual_connections():
 
     output = model(x, edge_index)
     assert output.shape == (3, 8)
+
+
+def test_unknown_norm_raises():
+    """An unrecognized normalization name is rejected instead of silently ignored."""
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        GCN(
+            in_features=8,
+            hidden_features=16,
+            num_layers=2,
+            out_features=4,
+            norm="layernorm",
+            rngs=nnx.Rngs(42),
+        )
+
+
+def test_act_none_disables_activation():
+    """``act=None`` composes the convolutions without any non-linearity."""
+    x, edge_index = create_test_data()
+
+    model = GCN(
+        in_features=8,
+        hidden_features=8,
+        num_layers=2,
+        out_features=8,
+        act=None,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model.convs[1](model.convs[0](x, edge_index), edge_index)
+    assert jnp.allclose(model(x, edge_index), expected, atol=1e-6)
+
+    relu_model = GCN(
+        in_features=8,
+        hidden_features=8,
+        num_layers=2,
+        out_features=8,
+        act=nnx.relu,
+        rngs=nnx.Rngs(42),
+    )
+    assert not jnp.allclose(relu_model(x, edge_index), expected, atol=1e-6)
+
+
+def test_residual_applies_to_first_layer():
+    """The residual connection is added whenever the widths line up."""
+    x, edge_index = create_test_data()
+
+    model = GraphSAGE(
+        in_features=8,
+        hidden_features=8,
+        num_layers=1,
+        out_features=8,
+        residual=True,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model.convs[0](x, edge_index) + x
+    assert jnp.allclose(model(x, edge_index), expected, atol=1e-6)
+
+
+def test_edge_weight_is_not_passed_as_edge_attr():
+    """Edge weights only reach convolutions that support them."""
+    x, edge_index = create_test_data()
+    edge_weight = jnp.array([0.5, 1.5, 2.5, 3.5])
+
+    # GAT consumes edge attributes, not edge weights: a one-dimensional
+    # edge_weight must not be reinterpreted as an edge feature
+    gat = GAT(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        edge_dim=1,
+        rngs=nnx.Rngs(42),
+    )
+    with pytest.raises(ValueError, match="does not consume edge weights"):
+        gat(x, edge_index, edge_weight=edge_weight)
+
+    # ... while a genuine edge attribute does change the GAT output
+    edge_attr = edge_weight.reshape(-1, 1)
+    assert not jnp.allclose(gat(x, edge_index, edge_attr=edge_attr), gat(x, edge_index), atol=1e-6)
+
+    # GCN does consume edge weights
+    gcn = GCN(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        rngs=nnx.Rngs(42),
+    )
+    assert not jnp.allclose(
+        gcn(x, edge_index, edge_weight=edge_weight), gcn(x, edge_index), atol=1e-6
+    )
+
+    # ... and rejects edge attributes, which GCNConv has no way to consume
+    with pytest.raises(ValueError, match="does not consume edge attributes"):
+        gcn(x, edge_index, edge_attr=edge_attr)
+
+
+class _UndeclaredEdgeSupportGNN(BasicGNN):
+    """Subclass that does not declare support for any edge information."""
+
+    def init_conv(
+        self, in_features: int, out_features: int, rngs: nnx.Rngs | None = None, **kwargs
+    ) -> MessagePassing:
+        """Initialize a GCNConv layer."""
+        return GCNConv(in_features, out_features, rngs=rngs)
+
+
+def test_subclass_without_edge_support_rejects_edge_information():
+    """A subclass that forgets the support flags fails loudly instead of dropping edge data."""
+    x, edge_index = create_test_data()
+    edge_weight = jnp.array([0.5, 1.5, 2.5, 3.5])
+
+    model = _UndeclaredEdgeSupportGNN(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        rngs=nnx.Rngs(42),
+    )
+
+    assert model.supports_edge_weight is False
+    assert model.supports_edge_attr is False
+    assert model(x, edge_index).shape == (3, 4)
+
+    with pytest.raises(ValueError, match="does not consume edge weights"):
+        model(x, edge_index, edge_weight=edge_weight)
+
+    with pytest.raises(ValueError, match="does not consume edge attributes"):
+        model(x, edge_index, edge_attr=edge_weight.reshape(-1, 1))
+
+
+def test_gat_activation_defaults_to_relu():
+    """GAT inherits BasicGNN's default non-linearity instead of dropping it."""
+    x, edge_index = create_test_data()
+    kwargs = {"in_features": 8, "hidden_features": 16, "num_layers": 2, "out_features": 4}
+
+    default_model = GAT(**kwargs, rngs=nnx.Rngs(42))
+    relu_model = GAT(**kwargs, act=nnx.relu, rngs=nnx.Rngs(42))
+    linear_model = GAT(**kwargs, act=None, rngs=nnx.Rngs(42))
+
+    assert default_model.act is nnx.relu
+    assert jnp.allclose(default_model(x, edge_index), relu_model(x, edge_index), atol=1e-6)
+    assert not jnp.allclose(default_model(x, edge_index), linear_model(x, edge_index), atol=1e-6)
+
+
+def test_gcn_cached_requires_precompute_norm():
+    """A cached GCN is usable once its per-layer caches are filled eagerly."""
+    x, edge_index = create_test_data()
+    kwargs = {"in_features": 8, "hidden_features": 16, "num_layers": 2, "out_features": 4}
+
+    cached = GCN(**kwargs, cached=True, rngs=nnx.Rngs(42))
+    uncached = GCN(**kwargs, cached=False, rngs=nnx.Rngs(42))
+
+    with pytest.raises(RuntimeError, match="normalization cache is empty"):
+        cached(x, edge_index)
+
+    cached.precompute_norm(edge_index, num_nodes=x.shape[0])
+    assert jnp.allclose(cached(x, edge_index), uncached(x, edge_index), atol=1e-6)
+
+    # The cache survives a JAX transformation, which cannot fill it itself
+    jitted = nnx.jit(lambda model, x, edge_index: model(x, edge_index))
+    assert jnp.allclose(jitted(cached, x, edge_index), uncached(x, edge_index), atol=1e-6)
+
+    with pytest.raises(ValueError, match="requires 'cached=True'"):
+        uncached.precompute_norm(edge_index, num_nodes=x.shape[0])
+
+
+def test_batch_size_reaches_graph_norm_under_jit():
+    """``batch_size`` makes the segment count of ``graph_norm`` static."""
+    x, edge_index = create_test_data()
+    batch = jnp.array([0, 0, 1])
+
+    model = GraphSAGE(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        norm="graph_norm",
+        rngs=nnx.Rngs(42),
+    )
+    expected = model(x, edge_index, batch=batch, batch_size=2)
+
+    @nnx.jit
+    def with_batch_size(model, x, edge_index, batch):
+        return model(x, edge_index, batch=batch, batch_size=2)
+
+    @nnx.jit
+    def without_batch_size(model, x, edge_index, batch):
+        return model(x, edge_index, batch=batch)
+
+    assert jnp.allclose(with_batch_size(model, x, edge_index, batch), expected, atol=1e-6)
+
+    # Without a static count the number of segments has to be read off the
+    # traced batch vector, which JAX refuses
+    with pytest.raises(jax.errors.ConcretizationTypeError):
+        without_batch_size(model, x, edge_index, batch)
+
+    # Eagerly, the count is derived from the batch vector and agrees
+    assert jnp.allclose(model(x, edge_index, batch=batch), expected, atol=1e-6)
+
+
+def test_gin_inner_mlp_configuration():
+    """The MLP inside GINConv drops no activations twice and never uses GraphNorm."""
+    model = GIN(
+        in_features=8,
+        hidden_features=16,
+        num_layers=2,
+        out_features=4,
+        dropout_rate=0.5,
+        norm="graph_norm",
+        rngs=nnx.Rngs(42),
+    )
+
+    # Dropout is applied once per block, by the model and not by the inner MLP.
+    # Every module owns a Dropout layer; a rate of 0 is what makes it inert.
+    assert model.dropout.rate == 0.5
+    assert model.convs[0].nn.dropout.rate == 0.0
+
+    # GraphNorm is applied between blocks; the inner MLP normalizes per node
+    assert type(model.norms[0]).__name__ == "GraphNorm"
+    assert type(model.convs[0].nn.norms[0]).__name__ == "LayerNorm"
 
 
 def test_different_output_features():
@@ -254,3 +474,57 @@ if __name__ == "__main__":
     # Run a basic test
     test_gcn(None, 0.0, None, None, None)
     print("Basic GNN tests passed!")
+
+
+def test_gat_embedding_model_concatenates_last_layer_heads():
+    """With ``out_features=None`` the last layer concatenates narrow heads.
+
+    PyG disables concatenation only on a layer that maps straight to a
+    requested ``out_features``; an embedding model keeps
+    ``hidden_features // heads`` channels per head throughout. Averaging
+    full-width heads instead produced the same output shape from a different
+    architecture, which is why the shape grid never caught it.
+    """
+    model = GAT(8, 16, num_layers=2, heads=4, rngs=nnx.Rngs(0))
+
+    last = model.convs[-1]
+    assert last.concat is True
+    assert last.out_features == 4
+    assert last.heads == 4
+
+    # A layer that does map to out_features averages full-width heads.
+    model_out = GAT(8, 16, num_layers=2, out_features=3, heads=4, rngs=nnx.Rngs(0))
+    assert model_out.convs[-1].concat is False
+    assert model_out.convs[-1].out_features == 3
+
+
+def test_gat_model_forwards_dropout_to_attention():
+    """The model-level dropout rate reaches every GATConv's attention dropout."""
+    model = GAT(8, 16, num_layers=3, heads=4, dropout_rate=0.5, rngs=nnx.Rngs(0))
+    assert all(conv.dropout_rate == 0.5 for conv in model.convs)
+
+
+def test_model_conv_kwargs_take_effect():
+    """Keyword arguments documented as conv arguments actually reach the conv."""
+    gcn = GCN(8, 16, num_layers=2, bias=False, rngs=nnx.Rngs(0))
+    assert all(conv.bias is None for conv in gcn.convs)
+
+    gin = GIN(8, 16, num_layers=2, eps=0.7, rngs=nnx.Rngs(0))
+    assert all(conv.eps == 0.7 for conv in gin.convs)
+
+    gat = GAT(
+        8, 16, num_layers=2, heads=4, add_self_loops=False, negative_slope=0.9, rngs=nnx.Rngs(0)
+    )
+    assert all(conv._add_self_loops is False for conv in gat.convs)
+    assert all(conv.negative_slope == 0.9 for conv in gat.convs)
+
+    sage = GraphSAGE(8, 16, num_layers=2, aggr="max", rngs=nnx.Rngs(0))
+    assert all(conv.aggr == "max" for conv in sage.convs)
+
+
+def test_model_rejects_unknown_conv_kwargs():
+    """An unsupported conv argument raises instead of being dropped silently."""
+    with pytest.raises(TypeError):
+        GCN(8, 16, num_layers=2, nonsense=1, rngs=nnx.Rngs(0))
+    with pytest.raises(TypeError):
+        GAT(8, 16, num_layers=2, nonsense=1, rngs=nnx.Rngs(0))

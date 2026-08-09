@@ -1,9 +1,13 @@
-from typing import Any, Union
+import math
+from typing import Union
 
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from flax.nnx.nn import initializers
-from flax.typing import Axes, Dtype, Initializer
+from flax.typing import Initializer
+
+from jraphx.utils.dtype import parse_dtype
 
 
 class LayerNorm(nnx.Module):
@@ -16,8 +20,10 @@ class LayerNorm(nnx.Module):
         \textrm{E}[\mathbf{x}]}{\sqrt{\textrm{Var}[\mathbf{x}] + \epsilon}}
         \odot \gamma + \beta
 
-    The mean and standard-deviation are calculated across all nodes and all
-    node channels separately for each object in a mini-batch.
+    In :obj:`"node"` mode the mean and standard-deviation are calculated across
+    the node channels of each node separately. In :obj:`"graph"` mode they are
+    calculated across all nodes and all node channels separately for each object
+    in a mini-batch.
 
     Args:
         num_features (int or list): Size of each input sample, or list of
@@ -33,19 +39,23 @@ class LayerNorm(nnx.Module):
             normalized. If `"node"` is used, each node will be considered as
             an element to be normalized. (default: :obj:`"node"`)
         dtype: The dtype of the result (default: infer from input and params).
+            Strings such as ``"bfloat16"`` are resolved with
+            :func:`~jraphx.utils.parse_dtype`.
         param_dtype: The dtype passed to parameter initializers (default: float32).
+            Accepts the same strings.
         use_bias (bool, optional): If True, bias (beta) is added.
             (default: :obj:`True`)
         use_scale (bool, optional): If True, multiply by scale (gamma).
             (default: :obj:`True`)
         bias_init: Initializer for bias, by default, zero.
         scale_init: Initializer for scale, by default, one.
-        reduction_axes: Axes for computing normalization statistics.
-        feature_axes: Feature axes for learned bias and scaling.
-        axis_name: The axis name used to combine batch statistics from multiple devices.
-        axis_index_groups: Groups of axis indices within that named axis.
-        use_fast_variance: If true, use faster, but less numerically stable variance calculation.
         rngs: Random number generators for initialization.
+
+    .. note::
+        The reduction axes follow from ``mode`` and there is no cross-device
+        statistics synchronization; the ``reduction_axes``, ``feature_axes``,
+        ``axis_name``, ``axis_index_groups`` and ``use_fast_variance``
+        arguments of :class:`flax.nnx.LayerNorm` do not exist here.
     """
 
     def __init__(
@@ -55,19 +65,15 @@ class LayerNorm(nnx.Module):
         elementwise_affine: bool = True,
         mode: str = "node",
         *,
-        dtype: Dtype | None = None,
-        param_dtype: Dtype = jnp.float32,
+        dtype: str | type | jnp.dtype | None = None,
+        param_dtype: str | type | jnp.dtype = jnp.float32,
         use_bias: bool = True,
         use_scale: bool = True,
         bias_init: Initializer = initializers.zeros_init(),
         scale_init: Initializer = initializers.ones_init(),
-        reduction_axes: Axes = -1,
-        feature_axes: Axes = -1,
-        axis_name: str | None = None,
-        axis_index_groups: Any = None,
-        use_fast_variance: bool = True,
         rngs: nnx.Rngs | None = None,
     ):
+        self.normalized_shape: tuple[int, ...]
         if isinstance(num_features, int):
             self.normalized_shape = (num_features,)
         else:
@@ -76,30 +82,27 @@ class LayerNorm(nnx.Module):
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.mode = mode
-        self.dtype = dtype
-        self.param_dtype = param_dtype
+        self.dtype = None if dtype is None else parse_dtype(dtype)
+        self.param_dtype = parse_dtype(param_dtype)
         self.use_bias = use_bias
         self.use_scale = use_scale
         self.bias_init = bias_init
         self.scale_init = scale_init
-        self.reduction_axes = reduction_axes
-        self.feature_axes = feature_axes
-        self.axis_name = axis_name
-        self.axis_index_groups = axis_index_groups
-        self.use_fast_variance = use_fast_variance
 
         # Learnable parameters - maintain backward compatibility with elementwise_affine
-        self.weight: nnx.Param = nnx.data(None)
-        self.bias: nnx.Param = nnx.data(None)
+        self.weight: nnx.Param | None = nnx.data(None)
+        self.bias: nnx.Param | None = nnx.data(None)
 
         if elementwise_affine and (use_bias or use_scale):
             if rngs is not None:
                 if use_scale:
                     key = rngs.params()
-                    self.weight = nnx.Param(scale_init(key, self.normalized_shape, param_dtype))
+                    self.weight = nnx.Param(
+                        scale_init(key, self.normalized_shape, self.param_dtype)
+                    )
                 if use_bias:
                     key = rngs.params()
-                    self.bias = nnx.Param(bias_init(key, self.normalized_shape, param_dtype))
+                    self.bias = nnx.Param(bias_init(key, self.normalized_shape, self.param_dtype))
             else:
                 # Fallback for backward compatibility when no rngs provided
                 if use_scale:
@@ -109,60 +112,82 @@ class LayerNorm(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
+        batch_size: int | None = None,
         *,
-        mask: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        mask: jax.Array | None = None,
+    ) -> jax.Array:
         """Apply layer normalization.
 
         Args:
             x: Node features [num_nodes, *normalized_shape]
-            batch: Batch assignment vector [num_nodes] (optional)
-            mask: Binary array for masked normalization (optional)
+            batch: Batch assignment vector [num_nodes]. Only used in
+                :obj:`"graph"` mode; if :obj:`None`, all nodes are treated as
+                belonging to a single graph.
+            batch_size: Number of graphs in the mini-batch. Must be supplied as
+                a Python :obj:`int` when :obj:`"graph"` mode is traced by
+                :obj:`jax.jit`/:obj:`nnx.jit`, since the number of segments is a
+                static quantity. When omitted it is derived from ``batch``,
+                which forces a host synchronization and therefore only works
+                outside of a trace.
+            mask: Binary array for masked normalization. Accepted for API
+                symmetry and currently unused, since masking interacts with the
+                feature axes that layer normalization reduces over.
 
         Returns:
             Normalized features [num_nodes, *normalized_shape]
+
+        Raises:
+            ValueError: If ``mode`` is neither :obj:`"node"` nor :obj:`"graph"`.
         """
         if self.mode == "node":
-            # Standard layer norm per node
-            # Note: mask support for layer norm is complex as it affects feature dimensions
-            # For now, we keep the standard behavior and ignore mask
+            # Standard layer norm per node, reducing over the feature axis only.
             mean = x.mean(axis=-1, keepdims=True)
             var = x.var(axis=-1, keepdims=True)
 
-        elif self.mode == "graph" and batch is not None:
-            # Normalize within each graph
-            batch_size = int(batch.max()) + 1
-            out = jnp.zeros_like(x)
+        elif self.mode == "graph":
+            # Reduce over both the node axis and every feature axis, separately
+            # for each graph in the mini-batch.
+            if batch is None:
+                batch = jnp.zeros(x.shape[0], dtype=jnp.int32)
+                batch_size = 1
+            elif batch_size is None:
+                batch_size = int(batch.max()) + 1
 
-            for b in range(batch_size):
-                mask = batch == b
-                graph_x = x[mask]
+            feature_axes = tuple(range(1, x.ndim))
+            num_features = math.prod(x.shape[1:])
+            broadcast_shape = (-1,) + (1,) * (x.ndim - 1)
 
-                if graph_x.shape[0] > 0:
-                    # Compute statistics for this graph
-                    # Note: mask support for graph mode layer norm is complex
-                    # For now, we keep standard behavior
-                    mean = graph_x.mean(axis=-1, keepdims=True)
-                    var = graph_x.var(axis=-1, keepdims=True)
+            # Accumulated in at least float32, never in a narrower `x.dtype`:
+            # bfloat16 has 8 mantissa bits, so its consecutive integers stop at 256
+            # and both the element count and the running total freeze there, skewing
+            # every graph larger than that by a size-dependent factor.
+            accum_dtype = jnp.promote_types(x.dtype, jnp.float32)
+            widened = x.astype(accum_dtype)
+            counts = jax.ops.segment_sum(
+                jnp.ones(batch.shape[0], dtype=accum_dtype), batch, num_segments=batch_size
+            )
+            # Elements per graph; empty graphs are clamped to avoid a 0/0 mean.
+            denom = jnp.maximum(counts, 1.0) * num_features
 
-                    # Normalize
-                    graph_x_norm = (graph_x - mean) / jnp.sqrt(var + self.eps)
+            graph_mean = (
+                jax.ops.segment_sum(widened.sum(axis=feature_axes), batch, num_segments=batch_size)
+                / denom
+            )
+            mean = graph_mean[batch].reshape(broadcast_shape)
 
-                    # Apply affine transformation
-                    if self.elementwise_affine:
-                        graph_x_norm = self.weight.value * graph_x_norm + self.bias.value
-
-                    # Store result
-                    out = out.at[mask].set(graph_x_norm)
-
-            return out
+            centered = widened - mean
+            graph_var = (
+                jax.ops.segment_sum(
+                    (centered**2).sum(axis=feature_axes), batch, num_segments=batch_size
+                )
+                / denom
+            )
+            var = graph_var[batch].reshape(broadcast_shape)
 
         else:
-            # Fallback to node-wise normalization
-            mean = x.mean(axis=-1, keepdims=True)
-            var = x.var(axis=-1, keepdims=True)
+            raise ValueError(f"Unknown LayerNorm mode '{self.mode}' (expected 'node' or 'graph')")
 
         # Normalize
         x_norm = (x - mean) / jnp.sqrt(var + self.eps)
@@ -170,12 +195,15 @@ class LayerNorm(nnx.Module):
         # Apply affine transformation
         if self.elementwise_affine:
             if self.weight is not None:
-                x_norm = self.weight.value * x_norm
+                x_norm = self.weight[...] * x_norm
             if self.bias is not None:
-                x_norm = x_norm + self.bias.value
+                x_norm = x_norm + self.bias[...]
 
-        # Apply dtype conversion if specified
+        # Graph mode widens its accumulators, so hand the caller's own dtype back
+        # unless an explicit output dtype was requested
         if self.dtype is not None:
             x_norm = x_norm.astype(self.dtype)
+        else:
+            x_norm = x_norm.astype(x.dtype)
 
         return x_norm

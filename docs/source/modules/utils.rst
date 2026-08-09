@@ -12,10 +12,10 @@ Scatter Operations
 
 The scatter module provides efficient implementations of scatter operations for aggregating node features.
 
-scatter_sum
+scatter_add
 ~~~~~~~~~~~
 
-.. autofunction:: scatter_sum
+.. autofunction:: scatter_add
 
    Scatter sum operation for aggregating values by index.
 
@@ -23,14 +23,14 @@ scatter_sum
 
    .. code-block:: python
 
-      from jraphx.utils.scatter import scatter_sum
+      from jraphx.utils.scatter import scatter_add
       import jax.numpy as jnp
 
       src = jnp.array([1.0, 2.0, 3.0, 4.0])
       index = jnp.array([0, 0, 1, 1])
 
       # Sum values by index
-      out = scatter_sum(src, index, dim_size=2)
+      out = scatter_add(src, index, dim_size=2)
       # Result: [3.0, 7.0]
 
 scatter_mean
@@ -87,7 +87,9 @@ scatter_std
 
 .. autofunction:: scatter_std
 
-   Scatter standard deviation operation.
+   Scatter standard deviation operation. Bessel's correction is applied by default
+   (``unbiased=True``, dividing by ``count - 1``); pass ``unbiased=False`` for the
+   population standard deviation.
 
 scatter
 ~~~~~~~
@@ -102,7 +104,8 @@ scatter
    - **index**: Index tensor for scattering
    - **dim**: Dimension to scatter along
    - **dim_size**: Size of the output dimension
-   - **reduce**: Reduction operation ('sum', 'mean', 'max', 'min', 'mul')
+   - **reduce**: Reduction operation ('add', with 'sum' as an alias, 'mean', 'max',
+     'min'). Any other value raises a ``ValueError``.
 
 Graph Utilities
 ---------------
@@ -129,12 +132,38 @@ degree
       in_deg = degree(edge_index[1], num_nodes=3)
       out_deg = degree(edge_index[0], num_nodes=3)
 
+parse_dtype
+~~~~~~~~~~~
+
+.. autofunction:: parse_dtype
+
+   Resolve a dtype spec -- a plain or prefixed string, a scalar type, or a
+   dtype object -- to the matching jax.numpy scalar type. Every jraphx
+   ``dtype`` argument accepts these specs, so a dtype can come straight from a
+   configuration file.
+
+   **Example:**
+
+   .. code-block:: python
+
+      from jraphx.utils import degree, parse_dtype
+      import jax.numpy as jnp
+
+      assert parse_dtype("float32") is jnp.float32
+      assert parse_dtype("jnp.bfloat16") is jnp.bfloat16
+
+      edge_index = jnp.array([[0, 1, 2], [1, 2, 0]])
+      deg = degree(edge_index[1], num_nodes=3, dtype="int32")
+
 to_undirected
 ~~~~~~~~~~~~~
 
 .. autofunction:: to_undirected
 
-   Convert a directed graph to undirected by adding reverse edges.
+   Convert a directed graph to undirected by adding reverse edges. The result is
+   coalesced: the edge list is row-wise sorted, duplicated edges appear once, and their
+   features are merged with ``reduce``. The number of resulting edges is data-dependent,
+   so this function cannot be traced by :func:`jax.jit`.
 
    **Example:**
 
@@ -179,20 +208,6 @@ remove_self_loops
 
    Remove self-loop edges from a graph.
 
-contains_self_loops
-~~~~~~~~~~~~~~~~~~~
-
-.. autofunction:: contains_self_loops
-
-   Check if a graph contains self-loop edges.
-
-is_undirected
-~~~~~~~~~~~~~
-
-.. autofunction:: is_undirected
-
-   Check if a graph is undirected.
-
 coalesce
 ~~~~~~~~
 
@@ -236,11 +251,13 @@ to_dense_adj
       edge_index = jnp.array([[0, 1, 2], [1, 2, 0]])
 
       # Convert to dense adjacency matrix
-      adj = to_dense_adj(edge_index, num_nodes=3)
+      adj = to_dense_adj(edge_index, max_num_nodes=3)
 
 to_edge_index
 ~~~~~~~~~~~~~
 
 .. autofunction:: to_edge_index
 
-   Convert adjacency representation to edge index format.
+   Convert adjacency representation to edge index format. Returns a
+   ``(edge_index, edge_attr)`` tuple; the stored value of every non-zero entry is always
+   returned as the edge attribute.

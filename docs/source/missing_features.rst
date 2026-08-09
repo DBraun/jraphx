@@ -2,12 +2,19 @@ Missing Features in JraphX
 ==========================
 
 This document tracks PyTorch Geometric features that are not yet implemented in JraphX.
+For what *is* implemented, see :doc:`modules/root`; for how it is tested, see
+:doc:`missing_tests`.
 
 High Priority (Core GNN functionality)
 --------------------------------------
 
 Convolution Layers
 ~~~~~~~~~~~~~~~~~~
+
+``GCNConv``, ``GATConv``, ``GATv2Conv``, ``SAGEConv``, ``GINConv``, ``GINEConv``,
+``EdgeConv``,
+``DynamicEdgeConv`` and ``TransformerConv`` are implemented, along with the
+``MessagePassing`` base class. Still missing:
 
 - **AGNNConv** - Attention-based Graph Neural Network
 - **APPNP** - Approximate Personalized Propagation of Neural Predictions
@@ -32,7 +39,7 @@ Convolution Layers
 - **NNConv** - Continuous kernel-based convolution
 - **PANConv** - Path Augmented Graph Neural Networks
 - **PDNConv** - Pathfinder Discovery Networks
-- **PNAConv** - Principal Neighbourhood Aggregation
+- **PNAConv** - Principal Neighborhood Aggregation
 - **PointConv** - Point Convolution for 3D
 - **PPFConv** - Point Pair Feature Convolution
 - **RGCNConv** - Relational Graph Convolutional Networks
@@ -49,7 +56,14 @@ Convolution Layers
 Aggregation Functions
 ~~~~~~~~~~~~~~~~~~~~~
 
-- **Aggregation Module** - Advanced aggregation functions
+JraphX exposes aggregation as scatter functions (``scatter_add``, ``scatter_mean``,
+``scatter_max``, ``scatter_min``, ``scatter_std``, ``scatter_logsumexp``) and pooling
+operations rather than as the composable ``Aggregation`` module hierarchy. The
+closest equivalents that do exist are ``global_sort_pool`` for ``SortAggregation``,
+``global_softmax_pool`` for ``SoftmaxAggregation`` and ``scatter_std`` for
+``VarAggregation``. Missing as modules:
+
+- **Aggregation Module** - The base class and its composable interface
 - **MultiAggregation** - Multiple aggregation combination
 - **AttentionalAggregation** - Attention-based aggregation
 - **DeepSetsAggregation** - DeepSets aggregation
@@ -60,9 +74,6 @@ Aggregation Functions
 - **MLPAggregation** - MLP aggregation
 - **PowerMeanAggregation** - Power mean aggregation
 - **Set2Set** - Set2Set aggregation
-- **SoftmaxAggregation** - Softmax aggregation
-- **SortAggregation** - Sort aggregation
-- **VarAggregation** - Variance aggregation
 
 Medium Priority (Advanced Features)
 -----------------------------------
@@ -70,39 +81,42 @@ Medium Priority (Advanced Features)
 Pooling Layers
 ~~~~~~~~~~~~~~
 
+``TopKPooling`` and ``SAGPooling`` are implemented, as are the global pooling
+operations (``global_add_pool``, ``global_mean_pool``, ``global_max_pool``,
+``global_min_pool``, ``global_sort_pool``, ``global_softmax_pool``). Still missing:
+
 - **ASAPooling** - Adaptive Structure Aware Pooling
 - **EdgePooling** - Edge-based pooling
-- **GCNPool** - GCN-based pooling
-- **GlobalAttention** - Global attention pooling
-- **GraphSAINTSampler** - GraphSAINT sampling
-- **HitAndRun** - Hit and Run sampling
-- **MaxPooling** - Max pooling on graphs
+- **GlobalAttention** - Global attention pooling. ``global_softmax_pool`` weights
+  nodes by a softmax over their own features; ``GlobalAttention`` learns a
+  separate gating network, so it is not a substitute.
 - **MemPooling** - Memory-based pooling
-- **NodeSAINTSampler** - Node-based GraphSAINT sampling
 - **PANPooling** - Path Augmented Pooling
 
 Pre-built Models
 ~~~~~~~~~~~~~~~~
 
+``BasicGNN`` and its ``GCN``, ``GAT``, ``GraphSAGE`` and ``GIN`` specialisations are
+implemented, as are ``MLP`` and ``JumpingKnowledge``. Still missing:
+
 - **AttentiveFP** - Attentive Fingerprinting
-- **BASIC_GNN** - Enhanced basic model variations
 - **DeepGCN** - Deep Graph Convolutional Networks
 - **DeepGraphInfomax** - Deep Graph Infomax
 - **DiffPool** - Differentiable Pooling
 - **GAE** - Graph Autoencoders
 - **VGAE** - Variational Graph Autoencoders
-- **GCN** - Enhanced versions
-- **GraphSAGE** - Enhanced versions
 - **GraphUNet** - Graph U-Net
-- **JK-Net** - Enhanced Jumping Knowledge Networks
 - **MetaPath2Vec** - MetaPath2Vec for heterogeneous graphs
 - **Node2Vec** - Node2Vec embeddings
-- **PNA** - Principal Neighbourhood Aggregation networks
+- **PNA** - Principal Neighborhood Aggregation networks
 - **SchNet** - SchNet for molecular property prediction
 - **TGN** - Temporal Graph Networks
 
 Normalization Layers
 ~~~~~~~~~~~~~~~~~~~~
+
+``BatchNorm``, ``LayerNorm`` (node and graph modes) and ``GraphNorm`` are
+implemented. Still missing:
 
 - **DiffGroupNorm** - Differentiable Group Normalization
 - **InstanceNorm** - Instance Normalization
@@ -144,8 +158,10 @@ Dense Layers
 Functional Operations
 ~~~~~~~~~~~~~~~~~~~~~
 
+- **contains_self_loops** - Predicate for the presence of self-loops
 - **dropout** - Graph-aware dropout
 - **gumbel_softmax** - Gumbel softmax for graphs
+- **is_undirected** - Predicate for edge-index symmetry
 - **local_graph_clustering** - Local clustering
 - **pagerank** - PageRank algorithm
 - **subgraph** - Subgraph sampling
@@ -168,6 +184,11 @@ Data Loading & Sampling
 - **NeighborSampler** - Neighborhood sampling
 - **RandomWalkSampler** - Random walk sampling
 - **ShaDowKHopSampler** - ShaDow k-hop sampling
+- **GraphSAINTSampler** - GraphSAINT sampling
+- **NodeSAINTSampler** - Node-based GraphSAINT sampling
+
+``examples/graph_saint_flickr.py`` shows GraphSAINT-style sampling driven from
+outside the library, using :obj:`torch_geometric` datasets and ``grain``.
 
 Datasets (Not Applicable - JAX doesn't need this)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

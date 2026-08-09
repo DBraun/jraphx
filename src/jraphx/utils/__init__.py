@@ -3,6 +3,7 @@
 from .coalesce import coalesce
 from .convert import to_dense_adj, to_edge_index, to_undirected
 from .degree import degree, in_degree, out_degree
+from .dtype import parse_dtype
 from .loop import add_self_loops, remove_self_loops
 from .num_nodes import maybe_num_nodes
 from .scatter import (
@@ -31,6 +32,7 @@ __all__ = [
     "masked_scatter_softmax",
     # Degree utilities
     "degree",
+    "parse_dtype",
     "in_degree",
     "out_degree",
     # Loop utilities

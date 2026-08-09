@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,10 @@ description = "Graph Neural Networks with JAX/NNX"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+# NOTICE carries the MIT permission notice for the PyTorch Geometric code and
+# docstrings this library derives from. Listing it explicitly keeps it in the wheel
+# and the sdist rather than relying on setuptools' default glob.
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "JraphX Contributors"},
 ]
@@ -37,10 +41,16 @@ classifiers = [
 ]
 
 dependencies = [
-    "jax>=0.7.0",
-    "jaxlib>=0.7.0",
-    "flax>=0.12.0",
-    "numpy>=1.21.0",
+    # flax 0.12.1 is the first release with nnx.Variable.get_value()/set_value(),
+    # which this library uses for variables that may hold None. The floor is set at
+    # 0.12.8 rather than 0.12.1 because that is the version CI exercises; the
+    # `test-minimum-versions` job pins exactly these lower bounds so the floor stays
+    # honest. flax 0.12.8 itself requires jax>=0.10.0.
+    "jax>=0.10.0",
+    "jaxlib>=0.10.0",
+    "flax>=0.12.8",
+    # jax 0.10 requires numpy>=2.0, so anything lower was never installable.
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +61,7 @@ dev = [
     "isort>=5.10",
     "mypy>=0.990",
     "ruff>=0.1.0",
+    "pre-commit>=3.0",
 ]
 test = [
     "pytest>=7.0",
@@ -63,10 +74,12 @@ examples = [
     "grain>=0.2.12"
 ]
 docs = [
-    "sphinx==5.1.1",
-    "sphinx-autodoc-typehints==1.19.2",
+    # sphinx 7.4 is the first release importable on Python 3.13, which this
+    # project's classifiers advertise
+    "sphinx>=7.4",
+    "sphinx-autodoc-typehints>=2.3",
     "sphinx-copybutton>=0.5.2",
-    "sphinx-rtd-theme"
+    "sphinx-rtd-theme>=3.0"
 ]
 all = [
     "jraphx[dev,test,examples,docs]",
@@ -101,7 +114,8 @@ known_first_party = ["jraphx"]
 known_third_party = ["jax", "jaxlib", "flax", "numpy", "optax"]
 
 [tool.mypy]
-python_version = "3.11"
+# NumPy's bundled stubs use PEP 695 syntax, which mypy only parses at 3.12 and above.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -142,7 +156,6 @@ ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
     "UP007", # Use X | Y for type annotations (conflicts with Python 3.11 compatibility)
-    "UP038", # Use X | Y in isinstance call instead of (X, Y) - keep tuple syntax for isinstance
     "I001",  # Import block is un-sorted (handled by isort)
 ]
 
@@ -161,20 +174,3 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require GPU",
 ]
-
-
-[tool.taskipy.tasks]
-# Formatting tasks
-format = "black src/ tests/ && isort src/ tests/"
-lint = "ruff check src/ tests/"
-typecheck = "mypy src/"
-test = "pytest tests/ -v"
-
-# Combined tasks
-check = "task lint && task typecheck"
-ci = "task format && task check && task test"
-
-# Development tasks
-install-dev = "pip install -e '.[dev]'"
-install-hooks = "pre-commit install"
-pre-commit = "pre-commit run --all-files"

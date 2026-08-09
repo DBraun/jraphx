@@ -51,6 +51,85 @@ def test_edge_conv_bipartite():
     assert out.shape == (6, 32)
 
 
+def test_edge_conv_bipartite_tuple():
+    """EdgeConv accepts a (x_src, x_dst) pair and outputs one row per target node."""
+    x_src = jnp.ones((4, 3))
+    x_dst = jnp.zeros((2, 3))
+    edge_index = jnp.array([[0, 1, 2, 3], [0, 0, 1, 1]])
+
+    nn = nnx.Linear(6, 5, rngs=nnx.Rngs(0))
+    conv = EdgeConv(nn, aggr="add")
+
+    out = conv((x_src, x_dst), edge_index)
+
+    assert out.shape == (2, 5)
+    assert jnp.all(jnp.isfinite(out))
+
+    # Every message is nn([x_dst_i, x_src_j - x_dst_i]) = nn([0, 0, 0, 1, 1, 1]),
+    # and each target node receives exactly two of them.
+    single = nn(jnp.array([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]))
+    assert jnp.allclose(out, jnp.repeat(2.0 * single, 2, axis=0), atol=1e-6)
+
+
+def test_edge_conv_bipartite_rejects_out_of_range_index():
+    """A source id outside the source table raises instead of yielding NaN."""
+    x_src = jnp.ones((2, 3))
+    x_dst = jnp.zeros((2, 3))
+    edge_index = jnp.array([[0, 4], [0, 1]])
+
+    conv = EdgeConv(nnx.Linear(6, 5, rngs=nnx.Rngs(0)), aggr="add")
+
+    with pytest.raises(IndexError, match="Source indices"):
+        conv((x_src, x_dst), edge_index)
+
+
+def test_edge_conv_runs_its_network_once():
+    """The wrapped network is applied exactly once per forward pass."""
+
+    class CountingNN(nnx.Module):
+        def __init__(self, in_features: int, out_features: int, rngs: nnx.Rngs):
+            self.lin = nnx.Linear(in_features, out_features, rngs=rngs)
+            self.calls = 0
+
+        def __call__(self, x):
+            self.calls += 1
+            return self.lin(x)
+
+    nn = CountingNN(8, 4, rngs=nnx.Rngs(0))
+    conv = EdgeConv(nn, aggr="add")
+
+    x = jnp.ones((3, 4))
+    edge_index = jnp.array([[0, 1, 2], [0, 1, 1]])
+
+    conv(x, edge_index)
+    assert nn.calls == 1
+
+
+def test_edge_conv_batch_norm_updates_statistics_once():
+    """A BatchNorm inside the network receives a single EMA update per forward."""
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    edge_index = jnp.array([[0, 1, 2], [0, 1, 1]])
+
+    def make_nn(seed: int) -> nnx.Sequential:
+        return nnx.Sequential(
+            nnx.Linear(4, 2, rngs=nnx.Rngs(seed)),
+            nnx.BatchNorm(2, rngs=nnx.Rngs(seed)),
+        )
+
+    conv = EdgeConv(make_nn(0), aggr="add")
+    conv(x, edge_index)
+
+    # One direct application of an identically initialized network on the same
+    # message inputs must leave the running statistics in the same state.
+    reference = make_nn(0)
+    x_j = x[edge_index[0]]
+    x_i = x[edge_index[1]]
+    reference(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+
+    assert jnp.allclose(conv.nn.layers[1].mean[...], reference.layers[1].mean[...])
+    assert jnp.allclose(conv.nn.layers[1].var[...], reference.layers[1].var[...])
+
+
 def test_edge_conv_aggregation():
     """Test EdgeConv with different aggregation methods."""
     x = random.normal(random.key(42), (4, 16))
@@ -176,6 +255,33 @@ def test_dynamic_edge_conv_basic():
 
     out = conv(x, knn_indices=knn_indices)
     assert out.shape == (8, 32)
+
+
+def test_dynamic_edge_conv_aggregates_over_own_neighbors():
+    """Each node's output must depend on the nodes *it* selected as neighbors.
+
+    A k-NN relation is not symmetric, so emitting ``edge_index`` with the query in row 0
+    would build the reverse graph: every node would aggregate over the nodes that picked
+    it instead of over its own neighbors. Perturbing a node's own neighbor must move
+    its output, and perturbing a non-neighbor must not.
+    """
+    # Node 0 -> 1, node 1 -> 2, node 2 -> 0. Node 0's neighbor is 1, and node 0 is
+    # node 2's neighbor, so the two orientations are distinguishable.
+    knn_indices = jnp.array([[1], [2], [0]])
+    x = jnp.array([[0.0, 0.0], [1.0, 0.0], [5.0, 0.0]])
+
+    conv = DynamicEdgeConv(nnx.Linear(4, 2, rngs=nnx.Rngs(1)), k=1)
+    baseline = conv(x, knn_indices=knn_indices)
+
+    moved_neighbor = conv(x.at[1].set(jnp.array([9.0, 9.0])), knn_indices=knn_indices)
+    moved_other = conv(x.at[2].set(jnp.array([9.0, 9.0])), knn_indices=knn_indices)
+
+    assert not jnp.allclose(baseline[0], moved_neighbor[0])
+    assert jnp.allclose(baseline[0], moved_other[0])
+
+    # With the correct orientation every node has exactly k incoming edges, so no row
+    # can be left empty by max aggregation
+    assert not jnp.allclose(baseline, 0.0)
 
 
 def test_dynamic_edge_conv_error():

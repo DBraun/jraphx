@@ -102,6 +102,7 @@ Module Organization
    - ``GATv2Conv``: Improved GAT with dynamic attention
    - ``SAGEConv``: GraphSAGE with multiple aggregations
    - ``GINConv``: Graph Isomorphism Network
+   - ``GINEConv``: GIN with edge features fused into every message
    - ``EdgeConv``: Edge convolution for point clouds
    - ``DynamicEdgeConv``: Dynamic edge convolution (requires pre-computed k-NN)
    - ``TransformerConv``: Graph Transformer with multi-head attention

@@ -218,23 +218,25 @@ When working with **fixed-size** graphs, you can use :obj:`nnx.vmap` for even mo
 
 .. code-block:: python
 
-    # For graphs with the same number of nodes
+    # For graphs with the same number of nodes; the feature width matches the
+    # GCNConv(2, 8) model defined above
     fixed_size_graphs = []
     for i in range(100):
-        x = jnp.ones((10, 16))  # All graphs have 10 nodes
+        x = jnp.ones((10, 2))  # All graphs have 10 nodes
         edge_index = jnp.array([[0, 1, 2], [1, 2, 0]])  # Same connectivity
         fixed_size_graphs.append(Data(x=x, edge_index=edge_index))
 
     # Stack into arrays for vmap processing
-    stacked_x = jnp.stack([g.x for g in fixed_size_graphs])          # [100, 10, 16]
+    stacked_x = jnp.stack([g.x for g in fixed_size_graphs])          # [100, 10, 2]
     stacked_edges = jnp.stack([g.edge_index for g in fixed_size_graphs])  # [100, 2, 3]
 
-    # Use vmap for parallel processing
+    # Use vmap for parallel processing; the model is closed over, so only the
+    # arrays carry a mapped axis
     @nnx.vmap
     def process_fixed_graphs(x, edge_index):
         return model(x, edge_index)
 
     # Process all graphs in parallel
-    all_outputs = process_fixed_graphs(stacked_x, stacked_edges)  # [100, 10, output_dim]
+    all_outputs = process_fixed_graphs(stacked_x, stacked_edges)  # [100, 10, 8]
 
 This approach is extremely efficient for datasets where all graphs have the same structure, as it can leverage JAX's vectorization optimizations without the overhead of index remapping that batching requires.

@@ -134,6 +134,38 @@ def test_batch(norm):
     assert output.shape == (3, 32)
 
 
+@pytest.mark.parametrize("norm", ["batch_norm", "layer_norm"])
+def test_batch_size_is_accepted_and_jittable(norm):
+    """``batch_size`` is a real forward argument and keeps the model jittable."""
+    x = jnp.array(
+        [
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+        ]
+    )
+    batch = jnp.array([0, 0, 1])
+
+    model = MLP(
+        in_features=8,
+        hidden_features=16,
+        out_features=32,
+        num_layers=2,
+        norm=norm,
+        rngs=nnx.Rngs(42),
+    )
+
+    expected = model(x, batch=batch, batch_size=2)
+    assert expected.shape == (3, 32)
+    assert jnp.allclose(model(x, batch=batch), expected, atol=1e-6)
+
+    @nnx.jit
+    def forward(model, x, batch):
+        return model(x, batch=batch, batch_size=2)
+
+    assert jnp.allclose(forward(model, x, batch), expected, atol=1e-6)
+
+
 def test_mlp_properties():
     """Test MLP properties and different configurations."""
     # Test single layer
@@ -184,21 +216,55 @@ def test_mlp_bias():
 
 def test_mlp_error_cases():
     """Test MLP error handling."""
+    rngs = nnx.Rngs(42)
+
+    # `rngs` is required; omitting it is a TypeError at the call site rather than
+    # an AttributeError raised deep inside layer construction
+    with pytest.raises(TypeError, match="rngs"):
+        MLP([16, 32])
+
     # Should fail without feature_list or in_features
     with pytest.raises(ValueError):
-        MLP()
+        MLP(rngs=rngs)
 
     # Should fail without num_layers when using in_features
     with pytest.raises(ValueError):
-        MLP(in_features=16)
+        MLP(in_features=16, rngs=rngs)
 
     # Should fail without hidden_features for multi-layer network
     with pytest.raises(ValueError):
-        MLP(in_features=16, num_layers=3, out_features=32)
+        MLP(in_features=16, num_layers=3, out_features=32, rngs=rngs)
 
     # Should fail without out_features
     with pytest.raises(ValueError):
-        MLP(in_features=16, num_layers=2, hidden_features=32)
+        MLP(in_features=16, num_layers=2, hidden_features=32, rngs=rngs)
+
+
+def test_mlp_unknown_norm_raises():
+    """An unrecognized normalization name is rejected instead of silently ignored."""
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32, 64], norm="layernorm", rngs=nnx.Rngs(42))
+
+    # GraphNorm is not supported by MLP, which never receives a batch vector
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32, 64], norm="graph_norm", rngs=nnx.Rngs(42))
+
+    # The check fires even when no normalization layer would be created
+    with pytest.raises(ValueError, match="Unknown normalization"):
+        MLP([16, 32], norm="graph_norm", rngs=nnx.Rngs(42))
+
+
+def test_mlp_act_none_disables_activation():
+    """``act=None`` makes the MLP a plain composition of linear layers."""
+    x = jnp.arange(8.0).reshape(2, 4)
+
+    mlp = MLP([4, 4, 4], act=None, plain_last=False, rngs=nnx.Rngs(42))
+
+    expected = mlp.lins[1](mlp.lins[0](x))
+    assert jnp.allclose(mlp(x), expected, atol=1e-6)
+
+    relu_mlp = MLP([4, 4, 4], act=nnx.relu, plain_last=False, rngs=nnx.Rngs(42))
+    assert not jnp.allclose(relu_mlp(x), expected, atol=1e-6)
 
 
 def test_mlp_single_layer():

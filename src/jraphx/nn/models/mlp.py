@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Union
 
-import jax.numpy as jnp
+import jax
 from flax import nnx
 
 from jraphx.nn.norm import BatchNorm, LayerNorm
@@ -46,12 +46,14 @@ class MLP(nnx.Module):
             Will override :attr:`feature_list`. (default: :obj:`None`)
         dropout_rate (float, optional): Dropout probability of each
             hidden embedding. (default: :obj:`0.`)
-        act (Callable, optional): The non-linear activation function to
-            use. (default: :obj:`jax.nn.relu`)
+        act (Callable, optional): The non-linear activation function to use, or
+            :obj:`None` to disable the activation entirely.
+            (default: :obj:`jax.nn.relu`)
         act_first (bool, optional): If set to :obj:`True`, activation is
             applied before normalization. (default: :obj:`False`)
-        norm (str or Callable, optional): The normalization function to
-            use. (default: :obj:`None`)
+        norm (str, optional): The normalization function to use
+            (:obj:`"batch_norm"`, :obj:`"layer_norm"` or :obj:`None`). Any
+            other value raises a :obj:`ValueError`. (default: :obj:`None`)
         plain_last (bool, optional): If set to :obj:`False`, will apply
             non-linearity, batch normalization and dropout to the last layer as
             well. (default: :obj:`True`)
@@ -69,12 +71,12 @@ class MLP(nnx.Module):
         out_features: int | None = None,
         num_layers: int | None = None,
         dropout_rate: float = 0.0,
-        act: Callable | None = None,
+        act: Callable | None = nnx.relu,
         act_first: bool = False,
         norm: str | None = None,
         plain_last: bool = True,
         bias: bool = True,
-        rngs: nnx.Rngs | None = None,
+        rngs: nnx.Rngs,
     ):
         super().__init__()
 
@@ -93,8 +95,12 @@ class MLP(nnx.Module):
             if out_features is None:
                 raise ValueError("Argument `out_features` must be given")
 
-            feature_list = [hidden_features] * (num_layers - 1)
-            feature_list = [in_features] + feature_list + [out_features]
+            if in_features is None:
+                raise ValueError("Argument `in_features` must be given")
+            # `hidden_features` is only consulted when there is a hidden layer,
+            # which the check above already guarantees.
+            hidden_list = [] if hidden_features is None else [hidden_features] * (num_layers - 1)
+            feature_list = [in_features] + hidden_list + [out_features]
 
         if feature_list is None:
             raise ValueError("Either feature_list or in_features must be specified")
@@ -104,14 +110,14 @@ class MLP(nnx.Module):
         self.feature_list = list(feature_list)
 
         # Set activation
-        self.act = act if act is not None else nnx.relu
+        self.act = act
         self.act_first = act_first
         self.plain_last = plain_last
         self.dropout_rate = dropout_rate
         self.norm_type = norm
 
         # Create linear layers
-        self.lins = nnx.List([])
+        self.lins: nnx.List[nnx.Linear] = nnx.List([])
         for _, (in_feat, out_feat) in enumerate(
             zip(self.feature_list[:-1], self.feature_list[1:], strict=False)
         ):
@@ -124,9 +130,18 @@ class MLP(nnx.Module):
                 )
             )
 
+        # Validate the normalization choice once, so a typo cannot silently
+        # disable normalization for the whole network
+        if norm is not None and norm not in ("batch_norm", "layer_norm"):
+            raise ValueError(
+                f"Unknown normalization {norm!r}; expected one of "
+                "'batch_norm', 'layer_norm', or None"
+            )
+
         # Create normalization layers
-        self.norms = nnx.List([])
+        self.norms: nnx.List[BatchNorm | LayerNorm | None] = nnx.List([])
         iterator = self.feature_list[1:-1] if plain_last else self.feature_list[1:]
+        norm_layer: BatchNorm | LayerNorm | None
         for hidden_feat in iterator:
             if norm == "batch_norm":
                 norm_layer = BatchNorm(hidden_feat, rngs=rngs)
@@ -136,11 +151,9 @@ class MLP(nnx.Module):
                 norm_layer = None
             self.norms.append(norm_layer)
 
-        # Create dropout
-        if dropout_rate > 0:
-            self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
-        else:
-            self.dropout = None
+        # A rate of 0 makes Dropout return its input untouched, without drawing a
+        # key, so there is nothing to gain from omitting the layer.
+        self.dropout = nnx.Dropout(dropout_rate, rngs=rngs)
 
     @property
     def in_features(self) -> int:
@@ -159,16 +172,20 @@ class MLP(nnx.Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        batch: jnp.ndarray | None = None,
+        x: jax.Array,
+        batch: jax.Array | None = None,
         batch_size: int | None = None,
-    ) -> jnp.ndarray:
+    ) -> jax.Array:
         """Forward pass.
 
         Args:
             x: Input features [num_nodes, in_features]
-            batch: Batch vector for batch normalization
-            batch_size: Number of graphs in batch
+            batch: Batch vector used by ``batch_norm`` and ``layer_norm``
+            batch_size: Number of graphs in the mini-batch, forwarded to
+                ``layer_norm``. Must be supplied as a Python :obj:`int` when the
+                model is traced by :obj:`jax.jit`/:obj:`nnx.jit` together with a
+                ``batch`` vector, since the number of segments is a static
+                quantity.
 
         Returns:
             Output features [num_nodes, out_features]
@@ -183,21 +200,21 @@ class MLP(nnx.Module):
                     x = self.act(x)
 
                 # Normalization
-                if i < len(self.norms) and self.norms[i] is not None:
+                if i < len(self.norms):
                     norm = self.norms[i]
-                    # Check if norm layer supports batch parameter
-                    if self.norm_type == "batch_norm" and batch is not None:
+                    if isinstance(norm, BatchNorm):
+                        # BatchNorm pools over every node of the mini-batch and
+                        # therefore has no segment count to make static
                         x = norm(x, batch)
-                    else:
-                        x = norm(x)
+                    elif norm is not None:
+                        x = norm(x, batch, batch_size)
 
                 # Activation (if not first)
                 if self.act is not None and not self.act_first:
                     x = self.act(x)
 
                 # Dropout (not on last layer if plain_last)
-                if self.dropout is not None:
-                    if i < self.num_layers - 1 or not self.plain_last:
-                        x = self.dropout(x)
+                if i < self.num_layers - 1 or not self.plain_last:
+                    x = self.dropout(x)
 
         return x

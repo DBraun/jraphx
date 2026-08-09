@@ -4,6 +4,7 @@ This module tests the coalesce functionality in JraphX for removing duplicate ed
 """
 
 import jax.numpy as jnp
+import pytest
 
 from jraphx.utils.coalesce import coalesce
 
@@ -136,6 +137,73 @@ def test_coalesce_large_graph():
     # All edges should be unique after coalescing
     edge_tuples = [(int(out[0][0, i]), int(out[0][1, i])) for i in range(out[0].shape[1])]
     assert len(edge_tuples) == len(set(edge_tuples))  # All unique
+
+
+def test_coalesce_high_node_ids():
+    """Node ids far beyond the int32 packing threshold must survive intact."""
+    edge_index = jnp.array([[0, 99999, 99999], [1, 3, 3]], dtype=jnp.int32)
+    edge_attr = jnp.array([1.0, 2.0, 3.0])
+
+    out_index, out_attr = coalesce(edge_index, edge_attr, num_nodes=100000)
+
+    assert jnp.array_equal(out_index, jnp.array([[0, 99999], [1, 3]], dtype=jnp.int32))
+    assert jnp.allclose(out_attr, jnp.array([1.0, 5.0]))
+
+    # The same answer without an explicit num_nodes.
+    out_index, out_attr = coalesce(edge_index, edge_attr)
+    assert jnp.array_equal(out_index, jnp.array([[0, 99999], [1, 3]], dtype=jnp.int32))
+    assert jnp.allclose(out_attr, jnp.array([1.0, 5.0]))
+
+
+def test_coalesce_reduce_sum_alias():
+    """``reduce='sum'`` is accepted and behaves like ``'add'``."""
+    edge_index = jnp.array([[0, 0, 1], [1, 1, 2]])
+    edge_attr = jnp.array([[1.0], [2.0], [3.0]])
+
+    index_sum, attr_sum = coalesce(edge_index, edge_attr, reduce="sum")
+    index_add, attr_add = coalesce(edge_index, edge_attr, reduce="add")
+
+    assert jnp.array_equal(index_sum, index_add)
+    assert jnp.allclose(attr_sum, attr_add)
+    assert jnp.allclose(attr_sum, jnp.array([[3.0], [3.0]]))
+
+
+def test_coalesce_unknown_reduce():
+    """An unsupported reduction fails loudly."""
+    edge_index = jnp.array([[0, 0], [1, 1]])
+    edge_attr = jnp.array([1.0, 2.0])
+
+    with pytest.raises(ValueError, match="Unknown reduce operation"):
+        coalesce(edge_index, edge_attr, reduce="mul")
+
+
+def test_coalesce_rejects_out_of_range_num_nodes():
+    """``num_nodes`` is validated instead of being silently ignored."""
+    edge_index = jnp.array([[0, 5], [1, 2]])
+
+    with pytest.raises(ValueError, match="out of range"):
+        coalesce(edge_index, num_nodes=3)
+
+
+def test_coalesce_reduction_values():
+    """Each reduction merges duplicate edge attributes correctly."""
+    edge_index = jnp.array([[0, 0, 1], [1, 1, 2]])  # (0,1) appears twice
+    edge_attr = jnp.array([2.0, 3.0, 1.0])
+
+    expected = {"add": 5.0, "mean": 2.5, "max": 3.0, "min": 2.0}
+    for reduce_op, value in expected.items():
+        out_index, out_attr = coalesce(edge_index, edge_attr, reduce=reduce_op)
+        assert jnp.array_equal(out_index, jnp.array([[0, 1], [1, 2]]))
+        assert jnp.allclose(out_attr, jnp.array([value, 1.0]))
+
+
+def test_coalesce_is_row_sorted():
+    """The coalesced edge list is lexicographically sorted, as in PyG."""
+    edge_index = jnp.array([[2, 1, 1, 0, 2], [1, 2, 0, 1, 1]])
+
+    out_index, _ = coalesce(edge_index)
+
+    assert jnp.array_equal(out_index, jnp.array([[0, 1, 1, 2], [1, 0, 2, 1]]))
 
 
 # TODO: The following features from PyG are not supported in JraphX:

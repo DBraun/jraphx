@@ -140,33 +140,44 @@ The Data subclass will have easy-to-understand additional fields. The correspond
 .. code-block:: python
 
     from flax.struct import dataclass
-    from typing import Optional
     import jraphx
 
     @dataclass
     class FaceData(Data):
         """Data class for 3D mesh graphs with face connectivity."""
-        face: jnp.ndarray | None = None       # Face connectivity [3, num_faces]
-        pos: jnp.ndarray | None = None        # 3D node positions
-        normal: jnp.ndarray | None = None     # Face normals
-        face_color: jnp.ndarray | None = None # Face colors
+        face: jax.Array | None = None       # Face connectivity [3, num_faces]
+        pos: jax.Array | None = None        # 3D node positions
+        normal: jax.Array | None = None     # Face normals
+        face_color: jax.Array | None = None # Face colors
 
     @dataclass
     class FaceBatch(jraphx.Batch):
         """Batch class for 3D mesh graphs."""
-        face: jnp.ndarray | None = None
-        pos: jnp.ndarray | None = None
-        normal: jnp.ndarray | None = None
-        face_color: jnp.ndarray | None = None
+        face: jax.Array | None = None
+        pos: jax.Array | None = None
+        normal: jax.Array | None = None
+        face_color: jax.Array | None = None
 
-        # Configure batching behavior as class attributes
+        # Configure batching behavior as class attributes. Only `normal` and
+        # `face_color` are element-level: they have one row per *face*, so they align
+        # with the `face` index field. `pos` has one row per *vertex* and is already
+        # handled as node-level data, so listing it here would make batching demand
+        # one row of `pos` per face and raise a RuntimeError.
         NODE_INDEX_FIELDS = {'face'}
-        ELEMENT_LEVEL_FIELDS = {'normal', 'face_color', 'pos'}
+        ELEMENT_LEVEL_FIELDS = {'normal', 'face_color'}
         _DATA_CLASS = FaceData  # Link for unbatching
 
         def __repr__(self) -> str:
             """Use the nice shape-based representation from parent class."""
             return jraphx.Batch.__repr__(self)
+
+        def __eq__(self, other: object) -> bool:
+            """Compare arrays element-wise.
+
+            ``flax.struct.dataclass`` regenerates ``__eq__`` for every subclass,
+            so the delegation has to be repeated in each subclass body.
+            """
+            return jraphx.Batch.__eq__(self, other)
 
     # Create mesh graphs
     mesh1 = FaceData(
@@ -195,6 +206,12 @@ The batching system provides three configuration options:
 - **ELEMENT_LEVEL_FIELDS**: Fields that are element-level features aligned with a node index field (concatenated during batching)
 - **GRAPH_LEVEL_FIELDS**: Fields that are per-graph attributes (stacked, not concatenated)
 
+These are class-level configuration, not dataclass fields: they are ``ClassVar`` on
+``Batch``, so they do not appear in ``Batch.__init__``, in ``dataclasses.fields(Batch)``
+or in the pytree that JAX traverses. Declare them (together with ``_DATA_CLASS``) in the
+body of a ``Batch`` subclass, as above; passing them to the constructor raises a
+``TypeError``.
+
 Example: Molecular Graphs
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -203,28 +220,36 @@ Example: Molecular Graphs
     @dataclass
     class MolecularData(Data):
         """Data class for molecular graphs."""
-        bond_index: jnp.ndarray | None = None  # Bond connectivity
-        bond_type: jnp.ndarray | None = None   # Bond type features
-        atom_charge: jnp.ndarray | None = None # Node-level charges
+        bond_index: jax.Array | None = None  # Bond connectivity
+        bond_type: jax.Array | None = None   # Bond type features
+        atom_charge: jax.Array | None = None # Node-level charges
         mol_weight: float | None = None        # Graph-level property
 
     @dataclass
     class MolecularBatch(jraphx.Batch):
         """Batch class for molecular graphs."""
-        bond_index: jnp.ndarray | None = None
-        bond_type: jnp.ndarray | None = None
-        atom_charge: jnp.ndarray | None = None
-        mol_weight: jnp.ndarray | None = None
+        bond_index: jax.Array | None = None
+        bond_type: jax.Array | None = None
+        atom_charge: jax.Array | None = None
+        mol_weight: jax.Array | None = None
 
-        # Configure batching behavior as class attributes
+        # Configure batching behavior as class attributes. `bond_type` is element-level
+        # -- one row per bond, aligned with `bond_index`. `atom_charge` has one row per
+        # *atom*, so it is node-level and must not be listed here: a molecule generally
+        # has a different number of atoms than bonds, and the element-level check would
+        # raise a RuntimeError. Left uncategorized, it still collates correctly.
         NODE_INDEX_FIELDS = {'bond_index'}
-        ELEMENT_LEVEL_FIELDS = {'bond_type', 'atom_charge'}
+        ELEMENT_LEVEL_FIELDS = {'bond_type'}
         GRAPH_LEVEL_FIELDS = {'mol_weight'}  # Per-molecule property
         _DATA_CLASS = MolecularData  # Link for unbatching
 
         def __repr__(self) -> str:
             """Use the nice shape-based representation from parent class."""
             return jraphx.Batch.__repr__(self)
+
+        def __eq__(self, other: object) -> bool:
+            """Compare arrays element-wise."""
+            return jraphx.Batch.__eq__(self, other)
 
     # Create molecules
     mol1 = MolecularData(
@@ -261,10 +286,10 @@ When converting from PyTorch Geometric datasets, create a custom Data class:
     @dataclass
     class PyGData(Data):
         """Data class compatible with PyTorch Geometric datasets."""
-        train_mask: jnp.ndarray | None = None
-        val_mask: jnp.ndarray | None = None
-        test_mask: jnp.ndarray | None = None
-        edge_attr: jnp.ndarray | None = None
+        train_mask: jax.Array | None = None
+        val_mask: jax.Array | None = None
+        test_mask: jax.Array | None = None
+        edge_attr: jax.Array | None = None
 
     def from_pyg(pyg_data):
         """Convert PyTorch Geometric data to JraphX format."""
@@ -278,6 +303,20 @@ When converting from PyTorch Geometric datasets, create a custom Data class:
             edge_attr=jnp.array(pyg_data.edge_attr.numpy())
                 if hasattr(pyg_data, 'edge_attr') else None
         )
+
+.. warning::
+
+    :meth:`~jraphx.data.Batch.from_data_list` collates an uncategorized field such as
+    ``train_mask`` correctly -- it concatenates along axis 0, which is right for
+    node-level data -- but :meth:`~jraphx.data.Batch.to_data_list` only rebuilds the
+    fields it recognizes: ``x``, ``pos``, ``edge_index``, ``edge_attr``, ``y``, and
+    whatever is named in ``NODE_INDEX_FIELDS``, ``ELEMENT_LEVEL_FIELDS`` or
+    ``GRAPH_LEVEL_FIELDS``. Anything else comes back as :obj:`None`, so the round trip
+    is not the identity for the masks above.
+
+    Batching and training are unaffected -- read the masks off the batch
+    (``batch.train_mask``), which is the usual pattern anyway. Only unbatching loses
+    them. If you need the round trip, index the batch yourself using ``batch.ptr``.
 
 Common Patterns
 ---------------
@@ -402,7 +441,7 @@ Common Issues
     # Right - subclass Data
     @dataclass
     class MyData(Data):
-        custom_attr: jnp.ndarray | None = None
+        custom_attr: jax.Array | None = None
 
     data = MyData(x=x, edge_index=edges, custom_attr=value)
 
@@ -417,7 +456,7 @@ Ensure all attributes are JAX-compatible types or mark non-JAX attributes:
     @dataclass
     class DataWithMetadata(Data):
         # JAX array - will be traced
-        features: jnp.ndarray | None = None
+        features: jax.Array | None = None
 
         # Non-JAX metadata - won't be traced
         name: str = struct.field(pytree_node=False, default="")

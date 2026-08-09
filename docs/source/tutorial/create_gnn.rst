@@ -23,18 +23,37 @@ The user only has to define the functions :math:`\phi` (*i.e.* :meth:`~jraphx.nn
 This is done with the help of the following methods:
 
 * :obj:`MessagePassing(aggr="add", flow="source_to_target")`: Defines the aggregation scheme to use (:obj:`"add"`, :obj:`"mean"` or :obj:`"max"`) and the flow direction of message passing (either :obj:`"source_to_target"` or :obj:`"target_to_source"`).
-* :obj:`MessagePassing.propagate(edge_index, size=None, **kwargs)`:
+* :obj:`MessagePassing.propagate(edge_index, x, edge_attr=None, size=None)`:
   The initial call to start propagating messages.
-  Takes in the edge indices and all additional data which is needed to construct messages and to update node embeddings.
+  Takes in the edge indices, the node features to gather from, and the optional edge features.
   Note that :func:`~jraphx.nn.conv.message_passing.MessagePassing.propagate` is not limited to exchanging messages in square adjacency matrices of shape :obj:`[N, N]` only, but can also exchange messages in general sparse assignment matrices, *e.g.*, bipartite graphs, of shape :obj:`[N, M]` by passing :obj:`size=(N, M)` as an additional argument.
   If set to :obj:`None`, the assignment matrix is assumed to be a square matrix.
-  For bipartite graphs with two independent sets of nodes and indices, and each set holding its own information, this split can be marked by passing the information as a tuple, *e.g.* :obj:`x=(x_N, x_M)`.
-* :obj:`MessagePassing.message(...)`: Constructs messages to node :math:`i` in analogy to :math:`\phi` for each edge :math:`(j,i) \in \mathcal{E}` if :obj:`flow="source_to_target"` and :math:`(i,j) \in \mathcal{E}` if :obj:`flow="target_to_source"`.
-  Can take any argument which was initially passed to :meth:`propagate`.
-  In addition, JAX arrays passed to :meth:`propagate` can be mapped to the respective nodes :math:`i` and :math:`j` by appending :obj:`_i` or :obj:`_j` to the variable name, *e.g.* :obj:`x_i` and :obj:`x_j`.
+  For bipartite graphs with two independent sets of nodes and indices, and each set holding its own information, this split can be marked by passing the information as a tuple, *e.g.* :obj:`x=(x_src, x_dst)`.
+* :obj:`MessagePassing.message(x_j, x_i=None, edge_attr=None)`: Constructs messages to node :math:`i` in analogy to :math:`\phi` for each edge :math:`(j,i) \in \mathcal{E}` if :obj:`flow="source_to_target"` and :math:`(i,j) \in \mathcal{E}` if :obj:`flow="target_to_source"`.
+  It receives the gathered source features, the gathered target features and the edge features.
   Note that we generally refer to :math:`i` as the central nodes that aggregates information, and refer to :math:`j` as the neighboring nodes, since this is the most common notation.
-* :obj:`MessagePassing.update(aggr_out, ...)`: Updates node embeddings in analogy to :math:`\gamma` for each node :math:`i \in \mathcal{V}`.
-  Takes in the output of aggregation as first argument and any argument which was initially passed to :func:`~jraphx.nn.conv.message_passing.MessagePassing.propagate`.
+* :obj:`MessagePassing.update(aggr_out, x)`: Updates node embeddings in analogy to :math:`\gamma` for each node :math:`i \in \mathcal{V}`.
+  Takes the output of aggregation as its first argument and the original target-side node features as its second.
+
+.. important::
+
+    **JraphX dispatches to** :meth:`message` **and** :meth:`update` **positionally**, and
+    this differs from PyTorch Geometric in two ways that matter when you port a layer.
+
+    There is no signature introspection, so :meth:`propagate` takes exactly the four
+    parameters listed above -- passing an extra keyword such as
+    :obj:`propagate(edge_index, x=x, norm=norm)` raises a :obj:`TypeError`. Anything else
+    a message needs must be carried on the layer itself, folded into ``edge_attr``, or
+    applied before or after the call.
+
+    Because the call is positional, the *names* of your :meth:`message` parameters carry
+    no meaning: the first parameter always receives the **source** features and the
+    second the **target** features, whatever you call them. There is no :obj:`_i`/:obj:`_j`
+    suffix convention. Writing :obj:`def message(self, x_i, x_j)` does not swap them --
+    it silently binds ``x_i`` to the source and ``x_j`` to the target, which is the
+    reverse of what the names say and produces wrong numbers for any message that is not
+    symmetric in its two endpoints. Always declare it as
+    :obj:`def message(self, x_j, x_i=None, edge_attr=None)`.
 
 Let us verify this by re-implementing two popular GNN variants, the `GCN layer from Kipf and Welling <https://arxiv.org/abs/1609.02907>`_ and the `EdgeConv layer from Wang et al. <https://arxiv.org/abs/1801.07829>`_.
 
@@ -73,7 +92,11 @@ The full layer implementation is shown below:
     class GCNConv(MessagePassing):
         def __init__(self, in_features, out_features, *, rngs: nnx.Rngs):
             super().__init__(aggr='add')  # "Add" aggregation (Step 5).
-            self.linear = nnx.Linear(in_features, out_features, use_bias=True, rngs=rngs)
+            # No bias on the linear map: the bias belongs *after* aggregation (Step 6).
+            # Folding it in here would let the degree normalization rescale it, which is
+            # not what the equation above says.
+            self.linear = nnx.Linear(in_features, out_features, use_bias=False, rngs=rngs)
+            self.bias = nnx.Param(jnp.zeros((out_features,)))
 
         def __call__(self, x, edge_index):
             # x has shape [N, in_features]
@@ -97,7 +120,8 @@ The full layer implementation is shown below:
             messages = jnp.take(x, row, axis=0) * edge_weight.reshape(-1, 1)
             out = segment_sum(messages, col, num_segments=x.shape[0])
 
-            return out
+            # Step 6: Apply the bias to the aggregated result.
+            return out + self.bias[...]
 
 :class:`~jraphx.nn.conv.GCNConv` inherits from :class:`~jraphx.nn.conv.message_passing.MessagePassing` with :obj:`"add"` aggregation.
 All the logic of the layer takes place in its :meth:`__call__` method.

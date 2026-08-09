@@ -91,3 +91,27 @@ if __name__ == "__main__":
     test_degree_empty()
     test_degree_consistency()
     print("All degree tests passed!")
+
+
+def test_in_degree_counts_source_only_nodes():
+    """A node appearing only as a source still gets an in-degree row (of 0).
+
+    Sizing the result from the target row alone silently truncated the vector:
+    node 3 appears only as a source here, and the pre-fix output had length 2.
+    """
+    edge_index = jnp.array([[0, 3], [1, 0]])
+
+    deg = in_degree(edge_index, dtype=jnp.int32)
+
+    assert deg.shape == (4,)
+    assert deg.tolist() == [1, 1, 0, 0]
+
+
+def test_out_degree_counts_target_only_nodes():
+    """A node appearing only as a target still gets an out-degree row (of 0)."""
+    edge_index = jnp.array([[0, 1], [3, 0]])
+
+    deg = out_degree(edge_index, dtype=jnp.int32)
+
+    assert deg.shape == (4,)
+    assert deg.tolist() == [1, 1, 0, 0]

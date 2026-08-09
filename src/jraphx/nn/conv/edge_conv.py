@@ -4,6 +4,9 @@ Based on "Dynamic Graph CNN for Learning on Point Clouds" (Wang et al., 2019)
 https://arxiv.org/abs/1801.07829
 """
 
+from typing import Union
+
+import jax
 from flax.nnx import Module
 from jax import numpy as jnp
 
@@ -50,23 +53,40 @@ class EdgeConv(MessagePassing):
 
     def message(
         self,
-        x_j: jnp.ndarray,
-        x_i: jnp.ndarray,
-        edge_attr: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
-        """Compute messages using edge features (x_i, x_j - x_i)."""
-        # Concatenate [x_i, x_j - x_i] and pass through network
-        return self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+        x_j: jax.Array,
+        x_i: jax.Array | None = None,
+        edge_attr: jax.Array | None = None,
+    ) -> jax.Array:
+        """Compute messages using edge features (x_i, x_j - x_i).
 
-    def __call__(self, x: jnp.ndarray, edge_index: jnp.ndarray) -> jnp.ndarray:
+        Raises:
+            RuntimeError: If ``x_i`` is missing. Unlike most layers, EdgeConv needs
+                both endpoints, since it operates on the difference between them.
+        """
+        if x_i is None:
+            raise RuntimeError(
+                "EdgeConv.message() requires the target features 'x_i'; it operates "
+                "on the difference between the two endpoints of each edge"
+            )
+        # Concatenate [x_i, x_j - x_i] and pass through network
+        out: jax.Array = self.nn(jnp.concatenate([x_i, x_j - x_i], axis=-1))
+        return out
+
+    def __call__(
+        self,
+        x: Union[jax.Array, tuple[jax.Array, jax.Array]],
+        edge_index: jax.Array,
+    ) -> jax.Array:
         """Forward pass.
 
         Args:
-            x: Node features [num_nodes, in_features]
+            x: Node features [num_nodes, in_features], or a ``(x_src, x_dst)``
+                tuple for bipartite graphs
             edge_index: Edge indices [2, num_edges]
 
         Returns:
-            Updated node features [num_nodes, out_features]
+            Updated node features [num_nodes, out_features], or
+            [num_dst_nodes, out_features] for bipartite input
         """
         return self.propagate(edge_index, x)
 
@@ -102,10 +122,10 @@ class DynamicEdgeConv(Module):
 
     def __call__(
         self,
-        x: jnp.ndarray,
-        edge_index: jnp.ndarray | None = None,
-        knn_indices: jnp.ndarray | None = None,
-    ) -> jnp.ndarray:
+        x: jax.Array,
+        edge_index: jax.Array | None = None,
+        knn_indices: jax.Array | None = None,
+    ) -> jax.Array:
         """Forward pass.
 
         Args:
@@ -118,11 +138,17 @@ class DynamicEdgeConv(Module):
             Updated node features [num_nodes, out_features]
         """
         if knn_indices is not None:
-            # Convert k-NN indices to edge_index format
+            # Convert k-NN indices to edge_index format. Row 0 holds the neighbor
+            # and row 1 the querying node, so that `propagate` aggregates at the
+            # node whose neighborhood was searched. Emitting the rows the other
+            # way round would build the *reverse* k-NN graph: since "j is among
+            # i's k nearest" is not a symmetric relation, each node would then
+            # aggregate over the nodes that selected it, and a node selected by
+            # nobody would receive no messages at all.
             num_nodes = x.shape[0]
-            sources = jnp.repeat(jnp.arange(num_nodes), self.k)
-            targets = knn_indices.flatten()
-            edge_index = jnp.stack([sources, targets])
+            queries = jnp.repeat(jnp.arange(num_nodes), self.k)
+            neighbors = knn_indices.flatten()
+            edge_index = jnp.stack([neighbors, queries])
         elif edge_index is None:
             raise ValueError(
                 "Either edge_index or knn_indices must be provided. "

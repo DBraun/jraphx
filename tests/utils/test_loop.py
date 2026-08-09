@@ -230,6 +230,77 @@ def test_add_self_loops_string_empty_graph():
     assert jnp.allclose(edge_attr_new[-3:], expected_attrs)
 
 
+def test_add_self_loops_string_fill_value_without_num_nodes():
+    """String fill values work when the node count has to be inferred."""
+    edge_index = jnp.array([[0, 1], [1, 2]])
+    edge_attr = jnp.array([[1.0], [2.0]])
+
+    out_index, out_attr = add_self_loops(edge_index, edge_attr, fill_value="mean")
+
+    expected_index = jnp.array([[0, 1, 0, 1, 2], [1, 2, 0, 1, 2]])
+    # Node 0 has no incoming edge -> 0, node 1 receives 1.0, node 2 receives 2.0.
+    expected_attr = jnp.array([[1.0], [2.0], [0.0], [1.0], [2.0]])
+
+    assert jnp.array_equal(out_index, expected_index)
+    assert jnp.allclose(out_attr, expected_attr)
+
+
+def test_add_self_loops_fill_value_sum_alias():
+    """``fill_value='sum'`` is accepted as the torch_geometric spelling of 'add'."""
+    edge_index = jnp.array([[0, 1, 0], [1, 1, 1]])
+    edge_attr = jnp.array([[1.0], [2.0], [3.0]])
+
+    _, attr_sum = add_self_loops(edge_index, edge_attr, fill_value="sum", num_nodes=2)
+    _, attr_add = add_self_loops(edge_index, edge_attr, fill_value="add", num_nodes=2)
+
+    assert jnp.allclose(attr_sum, attr_add)
+    assert jnp.allclose(attr_sum[-2:], jnp.array([[0.0], [6.0]]))
+
+
+def test_add_self_loops_duplicates_existing_loops():
+    """``add_self_loops`` appends one loop per node without de-duplicating."""
+    edge_index = jnp.array([[0, 1], [0, 0]])  # Node 0 already has a self-loop
+    edge_attr = jnp.array([5.0, 6.0])
+
+    out_index, out_attr = add_self_loops(edge_index, edge_attr, fill_value=1.0, num_nodes=2)
+
+    assert jnp.array_equal(out_index, jnp.array([[0, 1, 0, 1], [0, 0, 0, 1]]))
+    assert jnp.allclose(out_attr, jnp.array([5.0, 6.0, 1.0, 1.0]))
+
+    # Node 0 carries two (0, 0) edges: the original plus the appended loop.
+    is_loop_on_zero = (out_index[0] == 0) & (out_index[1] == 0)
+    assert int(jnp.sum(is_loop_on_zero)) == 2
+
+    # ``add_remaining_self_loops`` is the de-duplicating variant: existing
+    # loops are replaced by exactly one loop per node, appended in node order,
+    # and a replaced loop keeps its attribute.
+    remaining_index, remaining_attr = add_remaining_self_loops(
+        edge_index, edge_attr, fill_value=1.0, num_nodes=2
+    )
+    assert jnp.array_equal(remaining_index, jnp.array([[1, 0, 1], [0, 0, 1]]))
+    assert jnp.allclose(remaining_attr, jnp.array([6.0, 5.0, 1.0]))
+
+
+def test_add_remaining_self_loops_collapses_duplicate_loops():
+    """A node carrying several self-loops ends up with exactly one.
+
+    The surviving loop takes the attribute of the last duplicate, matching
+    PyG's index-assignment semantics.
+    """
+    edge_index = jnp.array([[0, 0, 1], [0, 0, 2]])
+    edge_attr = jnp.array([10.0, 20.0, 3.0])
+
+    out_index, out_attr = add_remaining_self_loops(
+        edge_index, edge_attr, fill_value=1.0, num_nodes=3
+    )
+
+    assert jnp.array_equal(out_index, jnp.array([[1, 0, 1, 2], [2, 0, 1, 2]]))
+    assert jnp.allclose(out_attr, jnp.array([3.0, 20.0, 1.0, 1.0]))
+
+    loops_on_zero = (out_index[0] == 0) & (out_index[1] == 0)
+    assert int(jnp.sum(loops_on_zero)) == 1
+
+
 # TODO: The following features from PyG are not yet implemented in JraphX:
 # - contains_self_loops() function - can be implemented using simple comparison
 # - segregate_self_loops() function - would separate self-loops from other edges

@@ -33,12 +33,15 @@ BatchNorm
       import flax.nnx as nnx
 
       # Create batch norm layer
+      # The learnable scale and shift are spelled the Flax way, as `use_scale` and
+      # `use_bias`; there is no `affine` argument.
       norm = BatchNorm(
           num_features=64,
           eps=1e-5,
           momentum=0.99,
-          affine=True,
           track_running_stats=True,
+          use_scale=True,
+          use_bias=True,
           rngs=nnx.Rngs(0)
       )
 
